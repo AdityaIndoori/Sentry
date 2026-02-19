@@ -1,3 +1,6 @@
+# All configuration lives in .env.docker — edit that file, not this one.
+# Run: docker compose --env-file .env.docker up --build
+
 services:
   backend:
     build:
@@ -10,6 +13,7 @@ services:
     volumes:
       - sentry-data:/app/data
       - ./watched:/app/watched
+      - ${SERVICE_HOST_PATH:-./_no_service}:/app/workspace
     ports:
       - "8000:8000"
     restart: unless-stopped

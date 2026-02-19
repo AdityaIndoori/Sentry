@@ -161,17 +161,27 @@ Incident memory store for pattern matching across past incidents, and the full M
 
 ```bash
 git clone <repo-url> && cd claude-sentry
-cp .env.example .env
-# Edit .env — set your API key. That's the only required step.
-# Everything else (including service awareness) has sensible defaults.
+cp .env.example .env.docker
+# Edit .env.docker — set your API key and SERVICE_HOST_PATH. That's it.
 ```
 
-> **One file to configure.** The `.env` file controls everything: LLM provider, security mode, log paths (`WATCH_PATHS`), and the service source code path (`SERVICE_SOURCE_PATH`). Point it at your service's source code and logs, and the AI agents will read the code to understand how it works.
+> **One file to configure.** Everything lives in `.env.docker` — no need to edit `docker-compose.yml`. Set your API key, then point `SERVICE_HOST_PATH` at your service's source code and `WATCH_PATHS` at its logs. The AI agents will read the source code to understand how your service works.
+
+```env
+# Required: your LLM API key
+ANTHROPIC_API_KEY=sk-ant-your-key-here
+
+# Point at your service (absolute host path)
+SERVICE_HOST_PATH=/home/user/my-flask-app
+
+# Watch its logs
+WATCH_PATHS=/app/watched/*.log,/app/workspace/logs/*.log
+```
 
 ### 2. Run with Docker
 
 ```bash
-docker compose up --build
+docker compose --env-file .env.docker up --build
 ```
 
 - **Dashboard:** http://localhost:3000
@@ -287,13 +297,16 @@ Claude Sentry doesn't just watch logs blindly — it **understands what it's mon
 
 ### How It Works
 
-You provide two paths in `.env`:
+You provide two settings in `.env.docker`:
 ```env
-SERVICE_SOURCE_PATH=/path/to/your/service/source
-WATCH_PATHS=/path/to/your/service/logs/*.log
+# Host path to your service (Docker mounts this at /app/workspace)
+SERVICE_HOST_PATH=/home/user/my-flask-app
+
+# Watch its logs (container paths)
+WATCH_PATHS=/app/watched/*.log,/app/workspace/logs/*.log
 ```
 
-That's it. No YAML files, no manual documentation. The AI agents use `read_file` and `grep_search` tools to explore the source code and understand the service architecture at runtime.
+That's it. No YAML files, no manual documentation, no editing `docker-compose.yml`. The AI agents use `read_file` and `grep_search` tools to explore the source code and understand the service architecture at runtime.
 
 ### What Agents Receive
 
