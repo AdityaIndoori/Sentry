@@ -161,27 +161,16 @@ Incident memory store for pattern matching across past incidents, and the full M
 
 ```bash
 git clone <repo-url> && cd claude-sentry
-cp .env.example .env.docker
-# Edit .env.docker — set your API key and SERVICE_HOST_PATH. That's it.
+cp .env.example .env
+# Edit .env — set your API key and SERVICE_HOST_PATH. That's it.
 ```
 
-> **One file to configure.** Everything lives in `.env.docker` — no need to edit `docker-compose.yml`. Set your API key, then point `SERVICE_HOST_PATH` at your service's source code and `WATCH_PATHS` at its logs. The AI agents will read the source code to understand how your service works.
-
-```env
-# Required: your LLM API key
-ANTHROPIC_API_KEY=sk-ant-your-key-here
-
-# Point at your service (absolute host path)
-SERVICE_HOST_PATH=/home/user/my-flask-app
-
-# Watch its logs
-WATCH_PATHS=/app/watched/*.log,/app/workspace/logs/*.log
-```
+> **One file to configure.** Everything lives in `.env` — no need to edit `docker-compose.yml`. Set your API key, point `SERVICE_HOST_PATH` at your service's source code, and the AI agents will read the source code to understand how your service works.
 
 ### 2. Run with Docker
 
 ```bash
-docker compose --env-file .env.docker up --build
+docker compose up --build
 ```
 
 - **Dashboard:** http://localhost:3000
@@ -297,7 +286,7 @@ Claude Sentry doesn't just watch logs blindly — it **understands what it's mon
 
 ### How It Works
 
-You provide two settings in `.env.docker`:
+You provide two settings in `.env`:
 ```env
 # Host path to your service (Docker mounts this at /app/workspace)
 SERVICE_HOST_PATH=/home/user/my-flask-app
@@ -333,6 +322,45 @@ The agents then autonomously explore the codebase — reading config files, entr
 | `ACTIVE` | Full autonomous remediation (fix + restart) |
 | `AUDIT` | Read-only analysis — logs intent but never modifies (default) |
 | `DISABLED` | All actions blocked |
+
+## Configuration Reference
+
+All settings live in `.env` (copy from `.env.example`). Only **`ANTHROPIC_API_KEY`** and **`SERVICE_HOST_PATH`** are required.
+
+| Variable | Description | Default | Required |
+|----------|-------------|---------|:--------:|
+| **LLM Provider** | | | |
+| `LLM_PROVIDER` | `anthropic` or `bedrock_gateway` | `anthropic` | |
+| `ANTHROPIC_API_KEY` | Anthropic API key | — | ✅ |
+| `ANTHROPIC_MODEL` | Model identifier | `claude-opus-4-0-20250514` | |
+| `ANTHROPIC_MAX_TOKENS` | Max response tokens | `16384` | |
+| `BEDROCK_GATEWAY_API_KEY` | Gateway API key (Bedrock mode) | — | if bedrock |
+| `BEDROCK_GATEWAY_BASE_URL` | Gateway endpoint URL | — | if bedrock |
+| `BEDROCK_GATEWAY_MODEL` | Bedrock model ID | `anthropic.claude-opus-4-0-20250514` | |
+| `BEDROCK_GATEWAY_MAX_TOKENS` | Max response tokens | `16384` | |
+| **Security** | | | |
+| `SENTRY_MODE` | `ACTIVE`, `AUDIT`, or `DISABLED` | `AUDIT` | |
+| `PROJECT_ROOT` | Root path agents can access | `/app/workspace` | |
+| `STOP_FILE_PATH` | Kill switch file path | `/app/STOP_SENTRY` | |
+| `MAX_COST_10MIN` | Max LLM cost per 10 min (USD) | `5.00` | |
+| `MAX_RETRIES` | Max remediation retry attempts | `3` | |
+| `RESTART_COOLDOWN` | Seconds between service restarts | `600` | |
+| **Log Watcher** | | | |
+| `WATCH_PATHS` | Comma-separated log file globs | `/var/log/syslog,...` | |
+| `POLL_INTERVAL` | Seconds between log polls | `2` | |
+| **Service Awareness** | | | |
+| `SERVICE_HOST_PATH` | Host path to service source code (Docker mount) | — | ✅ |
+| `SERVICE_SOURCE_PATH` | Container path where agents read code | `/app/workspace` | |
+| **Memory** | | | |
+| `MEMORY_FILE_PATH` | Path to incident memory JSON | `/app/data/sentry_memory.json` | |
+| `MAX_INCIDENTS_COMPACT` | Compact memory after N incidents | `50` | |
+| **Server** | | | |
+| `API_HOST` | FastAPI bind address | `0.0.0.0` | |
+| `API_PORT` | FastAPI port | `8000` | |
+| `LOG_LEVEL` | Python log level | `INFO` | |
+| `ENVIRONMENT` | Environment name | `production` | |
+
+> **Source of truth:** These variables are read by `backend/shared/config.py` via `load_config()`. The `.env.example` file contains every variable with its default value and inline documentation.
 
 ## Project Structure
 

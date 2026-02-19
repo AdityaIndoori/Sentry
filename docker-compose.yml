@@ -1,5 +1,6 @@
-# All configuration lives in .env.docker — edit that file, not this one.
-# Run: docker compose --env-file .env.docker up --build
+# All configuration lives in .env — edit that file, not this one.
+# Setup:  cp .env.example .env && edit .env
+# Run:    docker compose up --build
 
 services:
   backend:
@@ -7,7 +8,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: sentry-backend
-    env_file: .env.docker
+    env_file: .env
     environment:
       - PYTHONPATH=/app
     volumes:

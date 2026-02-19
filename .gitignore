@@ -15,6 +15,7 @@ env/
 # Environment
 .env
 .env.local
+.env.docker
 .env.production
 
 # IDE
