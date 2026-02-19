@@ -125,8 +125,11 @@ class TestVerificationResult:
         assert result.resolved is True
 
     def test_not_resolved(self):
+        # Bug #3 fix: "Not fixed" should NOT parse as resolved.
+        # The old code matched "fixed" even with negation prefix — now it
+        # correctly detects "not fixed" / "not resolved" as unresolved.
         result = VerificationResult.parse_from_text("Still failing. Not fixed.")
-        assert result.resolved is True  # "fixed" appears in text
+        assert result.resolved is False
 
     def test_no_keywords(self):
         result = VerificationResult.parse_from_text("Cannot determine status.")

@@ -8,7 +8,7 @@ import glob
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import AsyncIterator, Callable, Optional
 
 from backend.shared.config import WatcherConfig
@@ -81,17 +81,26 @@ class LogWatcher:
                 return
 
             with open(path, "r", encoding="utf-8", errors="replace") as f:
-                f.seek(last_pos)
-                line_num = sum(1 for _ in open(path, "rb")) if last_pos == 0 else 0
+                # Bug fix #6: Count lines correctly regardless of starting position.
+                # When last_pos == 0, start counting from line 0 (incremented to 1).
+                # When last_pos > 0, count lines in the portion BEFORE last_pos.
+                if last_pos > 0:
+                    # Read up to last_pos to count preceding lines
+                    preceding_text = f.read(last_pos)
+                    line_num = preceding_text.count('\n')
+                    # f is now at last_pos after reading
+                else:
+                    line_num = 0
 
                 for line in f:
                     line_num += 1
                     for pattern in self._patterns:
                         if pattern.search(line):
+                            # Bug fix #5: Use timezone-aware datetime instead of deprecated utcnow()
                             event = LogEvent(
                                 source_file=path,
                                 line_content=line.strip()[:500],
-                                timestamp=datetime.utcnow(),
+                                timestamp=datetime.now(timezone.utc),
                                 matched_pattern=pattern.pattern,
                                 line_number=line_num,
                             )

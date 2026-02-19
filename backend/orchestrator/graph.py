@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 class IncidentGraphState(TypedDict, total=False):
     """State that flows through the LangGraph nodes."""
     incident: Incident
+    service_context: str  # Rich service awareness context injected from ServiceRegistry
     triage: dict          # TriageResult as dict
     diagnosis: dict       # DiagnosisResult as dict
     remediation: dict     # RemediationResult as dict
@@ -45,17 +46,22 @@ class IncidentGraphState(TypedDict, total=False):
 # Node functions - each is a pure(ish) function that transforms state
 # ---------------------------------------------------------------------------
 
-def _build_triage_prompt(incident: Incident, history: list) -> str:
+def _build_triage_prompt(incident: Incident, history: list, service_context: str = "") -> str:
     hist_text = ""
     if history:
         hist_text = "\n\nSimilar past incidents:\n"
         for h in history[:3]:
             hist_text += f"- {h.symptom} -> {h.root_cause} -> Fix: {h.fix}\n"
 
+    svc_text = ""
+    if service_context:
+        svc_text = f"\n\n--- SERVICE CONTEXT (what this error relates to) ---\n{service_context}\n--- END SERVICE CONTEXT ---\n"
+
     return (
         f"You are Claude Sentry, an autonomous server monitoring AI.\n"
         f"Triage this production error log entry:\n\n"
         f"ERROR: {incident.symptom}\n"
+        f"{svc_text}"
         f"{hist_text}\n"
         f"Respond in this EXACT format:\n"
         f"SEVERITY: <low|medium|high|critical>\n"
@@ -66,7 +72,7 @@ def _build_triage_prompt(incident: Incident, history: list) -> str:
     )
 
 
-def _build_diagnosis_prompt(incident: Incident, config: AppConfig) -> str:
+def _build_diagnosis_prompt(incident: Incident, config: AppConfig, service_context: str = "") -> str:
     is_audit = config.security.mode == SentryMode.AUDIT
     audit_note = ""
     if is_audit:
@@ -75,10 +81,19 @@ def _build_diagnosis_prompt(incident: Incident, config: AppConfig) -> str:
             "Read-only tools work normally. Focus on read-only investigation first, "
             "then provide your best diagnosis."
         )
+    svc_text = ""
+    if service_context:
+        svc_text = (
+            f"\n\n{service_context}\n"
+            f"\nStart by reading the source code to understand how the service works. "
+            f"Look at config files, entry points, error handlers, and dependencies. "
+            f"Then investigate what went wrong."
+        )
     return (
         f"You are diagnosing a server incident.\n"
         f"Symptom: {incident.symptom}\n"
-        f"Severity: {incident.severity.value}\n\n"
+        f"Severity: {incident.severity.value}\n"
+        f"{svc_text}\n"
         f"Use the available tools to investigate. "
         f"Find the root cause. Be specific.{audit_note}"
     )
@@ -212,7 +227,8 @@ class IncidentGraphBuilder:
                                       f"Found {len(relevant)} similar past incidents",
                                       detail="; ".join(h.symptom[:60] for h in relevant[:3]))
 
-            prompt = _build_triage_prompt(incident, relevant)
+            service_context = state.get("service_context", "")
+            prompt = _build_triage_prompt(incident, relevant, service_context)
             incident.current_agent_action = "Calling Claude Opus 4.6 (effort: low)..."
             incident.log_activity(ActivityType.LLM_CALL, "triage",
                                   "Calling Claude Opus 4.6 for triage",
@@ -287,7 +303,8 @@ class IncidentGraphBuilder:
 
         try:
             tools = self._tools.get_tool_definitions()
-            prompt = _build_diagnosis_prompt(incident, self._config)
+            service_context = state.get("service_context", "")
+            prompt = _build_diagnosis_prompt(incident, self._config, service_context)
             max_loops = self._config.security.max_retries
 
             for loop_idx in range(max_loops):
@@ -318,8 +335,15 @@ class IncidentGraphBuilder:
                         call = ToolCall(tool_name=tc["name"], arguments=tc.get("arguments", {}))
                         result = await self._tools.execute(call)
                         result_text = result.output or result.error or ""
-                        prompt += f"\n\nTool {tc['name']} result: {result_text}"
+                        # Bug fix #11: Truncate tool results appended to prompt to prevent
+                        # unbounded growth. Each result is capped, and we cap total additions.
+                        truncated_result = result_text[:2000]
+                        prompt += f"\n\nTool {tc['name']} result: {truncated_result}"
                         tool_results.append(f"{tc['name']}: {result_text[:200]}")
+
+                        # Cap total prompt size to prevent token explosion
+                        if len(prompt) > 50000:
+                            prompt = prompt[:25000] + "\n\n[... earlier context truncated ...]\n\n" + prompt[-20000:]
 
                         incident.log_activity(ActivityType.TOOL_RESULT, "diagnosis",
                                               f"{tc['name']} → {'✓' if result.success else '✗'}",

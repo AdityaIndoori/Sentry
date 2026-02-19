@@ -1,74 +1,133 @@
 # 🛡️ Claude Sentry — Self-Healing Server Monitor
 
-A production-grade autonomous server monitor powered by **Anthropic Claude Opus 4.6**. It diagnoses infrastructure incidents, proposes fixes, and (with permission) applies them — all via a secure MCP (Model Context Protocol) tool interface with **Zero Trust security**.
+An autonomous AI service monitor. It uses a **multi-agent pipeline** to continuously monitor logs, diagnose errors, and fix them automatically. Agents interact through a **LangGraph orchestrator**, execute actions via secure **MCP (Model Context Protocol) tools**, and are governed by a **Zero Trust security** layer with 15 defense-in-depth controls.
 
 ## Architecture
 
+The diagram below shows how data flows through Claude Sentry — from log detection to AI-driven resolution.
+
 ```mermaid
-graph TB
+flowchart TB
+    %% ── External ──
+    Logs["📄 Log Files<br/>(nginx, app, db)"]
+    Server["🖥️ Target Server<br/>Files · Processes · Services"]
+
+    %% ── Frontend ──
     subgraph Frontend["🖥️ Frontend — React + Vite :3000"]
-        UI["Dashboard: Status • Security • Incidents • Memory • Trigger"]
+        UI["Dashboard<br/>Status · Incidents · Security · Memory · Trigger"]
     end
 
-    Frontend -->|"/api proxy (nginx)"| Backend
-
+    %% ── Backend ──
     subgraph Backend["⚙️ Backend — FastAPI :8000"]
 
-        subgraph ZeroTrust["🔒 Zero Trust Security Layer"]
-            Vault["NHI Vault"]
-            Gateway["AI Gateway"]
-            AuditLog["Audit Log"]
-            Throttle["Throttle"]
-            Registry["Tool Registry"]
+        %% Watcher
+        Watcher["👁️ Log Watcher<br/>Polls files · Regex matching"]
+
+        %% Orchestrator Engine
+        Engine["🧠 Orchestrator Engine<br/>Creates incidents · Manages lifecycle"]
+
+        %% Service Awareness
+        subgraph SvcLayer["🗺️ Service Awareness Layer"]
+            SvcReg["Service Registry<br/>Built from .env paths"]
+            SvcCtx["Context Builder<br/>Source path · Log paths<br/>Agents read the code"]
         end
 
-        subgraph Agents["🤖 Multi-Agent Pipeline"]
-            Supervisor["👑 Supervisor — routing only"]
-            Triage["🔍 Triage — effort:low, read-only"]
-            Detective["🕵️ Detective — effort:high, read+diag"]
-            Surgeon["🔧 Surgeon — effort:med, patch/fix"]
-            Validator["✅ Validator — effort:off, verify"]
+        %% LangGraph State Machine
+        subgraph Graph["📊 LangGraph State Machine"]
+            Triage["🔍 TRIAGE<br/>effort: low · read-only"]
+            Diagnosis["🕵️ DIAGNOSIS<br/>effort: high · read + diagnostics"]
+            Remediation["🔧 REMEDIATION<br/>effort: medium · active tools"]
+            Verification["✅ VERIFICATION<br/>effort: disabled · verify fix"]
         end
 
-        subgraph Orchestrator["🧠 LangGraph Orchestrator"]
-            SM["State Machine: TRIAGE → DIAGNOSIS → REMEDIATION → VERIFICATION"]
-            LLM["Opus 4.6 LLM Client\n(Adaptive Thinking)"]
+        %% LLM
+        LLM["🤖 LLM Client<br/>Configurable model · Adaptive Thinking"]
+
+        %% MCP Tools
+        subgraph Tools["🔧 MCP Tools"]
+            ReadOnly["read_file · grep_search · fetch_docs"]
+            ActiveTools["apply_patch · restart_service<br/>run_diagnostics"]
         end
 
-        subgraph MCPTools["🔧 MCP Tools"]
-            T1["read_file"]
-            T2["grep_search"]
-            T3["run_diagnostics"]
-            T4["apply_patch"]
-            T5["restart_service"]
-            T6["fetch_docs"]
-        end
+        %% Memory
+        Memory["📦 Memory Store<br/>Past incidents · System fingerprint"]
 
-        subgraph Support["📦 Support Services"]
-            Memory["Memory (RAG)\nJSON incident history"]
-            CB["Circuit Breaker\nCost tracking · $5/10min halt"]
-            Watcher["Log Watcher\nFile monitoring"]
+        %% Zero Trust
+        subgraph ZeroTrust["🔒 Zero Trust Security"]
+            Vault["NHI Vault<br/>Agent identities · Scoped credentials"]
+            Gateway["AI Gateway<br/>Prompt injection · PII scan"]
+            AuditLog["Audit Log<br/>Hash-chained · Immutable"]
+            Throttle["Throttle + Circuit Breaker<br/>Rate limits · Cost halt"]
+            ToolReg["Tool Registry<br/>Role-based access control"]
         end
     end
 
-    Supervisor --> Triage
-    Supervisor --> Detective
-    Supervisor --> Surgeon
-    Supervisor --> Validator
+    %% ═══ DATA FLOW ═══
 
-    SM --> LLM
-    LLM --> MCPTools
-    Watcher --> SM
-    SM --> Memory
+    %% 1. Log detection
+    Logs -->|"error lines"| Watcher
+    Watcher -->|"LogEvent"| Engine
 
+    %% 2. Service context enrichment
+    Engine -->|"source path<br/>+ log paths"| SvcReg
+    SvcReg -->|"service context:<br/>where to find<br/>source code"| SvcCtx
+    SvcCtx -->|"inject into<br/>agent prompts"| Engine
+
+    %% 3. Memory lookup
+    Engine <-->|"similar past<br/>incidents"| Memory
+
+    %% 4. LangGraph pipeline
+    Engine -->|"incident +<br/>service context"| Triage
+    Triage -->|"severity<br/>+ verdict"| Diagnosis
+    Diagnosis -->|"root cause"| Remediation
+    Remediation -->|"fix applied"| Verification
+    Verification -->|"resolved ✓"| Engine
+    Verification -.->|"not fixed<br/>retry"| Diagnosis
+
+    %% 5. Each node calls LLM with enriched prompts
+    Triage & Diagnosis & Remediation & Verification -->|"prompt +<br/>service context"| LLM
+
+    %% 6. LLM may request tool execution
+    LLM -->|"tool_calls"| Tools
+
+    %% 7. Tools interact with server
+    Tools -->|"read/write<br/>files & services"| Server
+
+    %% 8. Security governs all operations
+    Gateway -.->|"screens all<br/>prompts/outputs"| LLM
+    ToolReg -.->|"enforces<br/>permissions"| Tools
+    AuditLog -.->|"logs every<br/>action"| Engine
+    Throttle -.->|"rate limits<br/>+ cost cap"| Engine
+    Vault -.->|"issues scoped<br/>credentials"| Graph
+
+    %% 9. Startup: populate fingerprint
+    SvcReg -.->|"on startup:<br/>topology fingerprint"| Memory
+
+    %% 10. Frontend reads via API
+    Frontend <-->|"/api proxy<br/>(nginx)"| Engine
+
+    %% ═══ STYLES ═══
     style Frontend fill:#1a1a2e,stroke:#7c3aed,color:#e0e0ff
     style Backend fill:#0d1117,stroke:#58a6ff,color:#c9d1d9
+    style SvcLayer fill:#162230,stroke:#3fb950,color:#7ee787
+    style Graph fill:#1c1c1c,stroke:#d29922,color:#e3b341
+    style Tools fill:#1c1c1c,stroke:#58a6ff,color:#79c0ff
     style ZeroTrust fill:#1c1c1c,stroke:#f85149,color:#ff7b72
-    style Agents fill:#1c1c1c,stroke:#3fb950,color:#7ee787
-    style Orchestrator fill:#1c1c1c,stroke:#d29922,color:#e3b341
-    style MCPTools fill:#1c1c1c,stroke:#58a6ff,color:#79c0ff
-    style Support fill:#1c1c1c,stroke:#8b949e,color:#8b949e
 ```
+
+### How It Works (End-to-End Flow)
+
+1. **Detection** — The **Log Watcher** polls monitored log files for error patterns and emits `LogEvent`s
+2. **Service Context** — The **Orchestrator Engine** injects the service source code path and log paths into agent prompts, so agents know WHERE to look. Agents then use `read_file` and `grep_search` tools to understand the service themselves.
+3. **Memory Enrichment** — The engine queries the **Memory Store** for similar past incidents
+4. **AI Pipeline** — The engine launches the **LangGraph State Machine** with the incident + service context:
+   - **Triage** (low effort) → classifies severity, decides investigate or ignore
+   - **Diagnosis** (high effort) → uses tools to read files, run diagnostics, find root cause
+   - **Remediation** (medium effort) → proposes/applies fix via tools
+   - **Verification** (disabled thinking) → confirms fix worked; retries diagnosis if not
+5. **Tool Execution** — Each graph node can request **MCP Tools** (read_file, grep_search, apply_patch, etc.) to interact with the target server
+6. **Security Enforcement** — **Zero Trust** wraps everything: AI Gateway screens prompts for injection, Tool Registry enforces per-role access, Audit Log records every action, Circuit Breaker halts runaway costs
+7. **Resolution** — Resolved incidents are saved to **Memory** for future pattern matching
 
 ## Quick Start
 
@@ -77,8 +136,11 @@ graph TB
 ```bash
 git clone <repo-url> && cd claude-sentry
 cp .env.example .env
-# Edit .env — set your LLM provider (see "LLM Providers" below)
+# Edit .env — set your API key. That's the only required step.
+# Everything else (including service awareness) has sensible defaults.
 ```
+
+> **One file to configure.** The `.env` file controls everything: LLM provider, security mode, log paths (`WATCH_PATHS`), and the service source code path (`SERVICE_SOURCE_PATH`). Point it at your service's source code and logs, and the AI agents will read the code to understand how it works.
 
 ### 2. Run with Docker
 
@@ -193,6 +255,38 @@ Inspired by the OWASP "Non-Human Identity" guidelines. Each agent has:
 | **Surgeon** | Remediation | Medium | 2 | Apply fixes conservatively (active tools only) |
 | **Validator** | Verification | Disabled | 3 | Confirm fix worked (read + diagnostics) |
 
+## Service Awareness Layer
+
+Claude Sentry doesn't just watch logs blindly — it **understands what it's monitoring** by reading the service's source code.
+
+### How It Works
+
+You provide two paths in `.env`:
+```env
+SERVICE_SOURCE_PATH=/path/to/your/service/source
+WATCH_PATHS=/path/to/your/service/logs/*.log
+```
+
+That's it. No YAML files, no manual documentation. The AI agents use `read_file` and `grep_search` tools to explore the source code and understand the service architecture at runtime.
+
+### What Agents Receive
+
+When an error is detected, the agents receive context pointing them to the source code:
+
+```
+=== SERVICE CONTEXT ===
+Source code path: /app/workspace
+Log file paths: /var/log/nginx/*.log, /app/watched/*.log
+
+IMPORTANT: You have access to the service's source code via the read_file
+and grep_search tools. Use them to understand how the service works —
+read config files, entry points, error handlers, and dependencies.
+The source code is the ground truth for understanding this service.
+=== END SERVICE CONTEXT ===
+```
+
+The agents then autonomously explore the codebase — reading config files, entry points, error handlers, and dependency declarations — to understand how the service works and what went wrong.
+
 ## Operating Modes
 
 | Mode | Behavior |
@@ -212,6 +306,9 @@ Inspired by the OWASP "Non-Human Identity" guidelines. Each agent has:
 │   │   ├── detective_agent.py # Root-cause investigation
 │   │   ├── surgeon_agent.py  # Fix application
 │   │   └── validator_agent.py # Fix verification
+│   ├── services/         # Service Awareness Layer (NEW)
+│   │   ├── models.py         # ServiceContext — built from .env paths
+│   │   └── registry.py       # ServiceRegistry — builds context, no YAML needed
 │   ├── api/              # FastAPI REST endpoints
 │   ├── orchestrator/     # LangGraph state machine + LLM client
 │   ├── mcp_tools/        # MCP tool implementations

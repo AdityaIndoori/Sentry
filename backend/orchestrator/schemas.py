@@ -19,12 +19,18 @@ class TriageResult(BaseModel):
         """Parse structured fields from LLM free-text response."""
         text_lower = text.lower()
 
-        # Parse severity
+        # Parse severity - look for "SEVERITY:" prefix to avoid matching keywords
+        # in explanatory text (e.g., "this is not critical" would wrongly match "critical")
         severity = "medium"
-        for level in ["critical", "high", "medium", "low"]:
-            if level in text_lower:
-                severity = level
-                break
+        severity_match = re.search(r"severity:\s*(low|medium|high|critical)", text_lower)
+        if severity_match:
+            severity = severity_match.group(1)
+        else:
+            # Fallback: scan for standalone keywords, but prefer earlier/stronger matches
+            for level in ["critical", "high", "medium", "low"]:
+                if level in text_lower:
+                    severity = level
+                    break
 
         # Parse verdict
         verdict = "INVESTIGATE"
@@ -177,7 +183,13 @@ class VerificationResult(BaseModel):
     @classmethod
     def parse_from_text(cls, text: str) -> "VerificationResult":
         text_lower = text.lower()
-        resolved = any(w in text_lower for w in ["fixed", "resolved", "success"])
+        # Bug fix: Check for negation phrases FIRST before checking positive keywords.
+        # "not fixed", "not resolved", "not success" should NOT parse as resolved.
+        negation_phrases = ["not fixed", "not resolved", "not success", "unsuccessful",
+                            "unresolved", "failed", "still broken", "not working"]
+        has_negation = any(phrase in text_lower for phrase in negation_phrases)
+        has_positive = any(w in text_lower for w in ["fixed", "resolved", "success"])
+        resolved = has_positive and not has_negation
         return cls(resolved=resolved, reason=text[:200].strip())
 
 

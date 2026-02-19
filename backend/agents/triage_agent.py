@@ -79,11 +79,12 @@ class TriageAgent(BaseAgent):
                 f"{memory_context}"
             )
 
-            # Call LLM with low effort
+            # Bug fix #1: ILLMClient.analyze() signature is (prompt, effort, tools).
+            # Combine system prompt + user message into a single prompt string.
+            full_prompt = f"{TRIAGE_SYSTEM_PROMPT}\n\n{user_message}"
             response = await self._llm.analyze(
-                system_prompt=TRIAGE_SYSTEM_PROMPT,
-                user_message=user_message,
-                thinking={"type": "enabled", "budget_tokens": 2000},
+                prompt=full_prompt,
+                effort="low",
             )
 
             text = response.get("text", "")

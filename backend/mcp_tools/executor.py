@@ -7,7 +7,7 @@ import logging
 from typing import Optional
 
 from backend.shared.circuit_breaker import RateLimiter
-from backend.shared.config import SecurityConfig
+from backend.shared.config import SecurityConfig, SentryMode
 from backend.shared.interfaces import IToolExecutor
 from backend.shared.models import ToolCall, ToolCategory, ToolResult
 from backend.shared.security import SecurityGuard
@@ -55,6 +55,14 @@ class MCPToolExecutor(IToolExecutor):
                 error="STOP_SENTRY is active. All operations halted.",
             )
 
+        # Bug fix #14: DISABLED mode should block ALL tool execution
+        if self._security.mode == SentryMode.DISABLED:
+            return ToolResult(
+                tool_name=tool_call.tool_name,
+                success=False,
+                error="System is in DISABLED mode. No tools can execute.",
+            )
+
         entry = self._tool_map.get(tool_call.tool_name)
         if not entry:
             return ToolResult(
@@ -64,6 +72,22 @@ class MCPToolExecutor(IToolExecutor):
             )
 
         tool, category = entry
+
+        # Bug fix #10: Enforce audit mode centrally for ACTIVE tools.
+        # Individual tools check audit mode themselves, but this provides
+        # a safety net at the executor level for any tool that forgets.
+        if category == ToolCategory.ACTIVE and self._security.is_audit_mode():
+            logger.info(
+                f"[AUDIT] Blocked active tool at executor level: "
+                f"{tool_call.tool_name}"
+            )
+            return ToolResult(
+                tool_name=tool_call.tool_name,
+                success=True,
+                output=f"[AUDIT MODE] Tool {tool_call.tool_name} logged but not executed.",
+                audit_only=True,
+            )
+
         logger.info(
             f"Executing tool: {tool_call.tool_name} "
             f"(category={category.value})"

@@ -2,7 +2,9 @@
 
 ## 1. Executive Summary
 
-Claude Sentry is a "Self-Healing Server Monitor" that uses **Anthropic Claude Opus 4.6 LLM** exclusively to diagnose and fix infrastructure incidents. Unlike traditional monitoring (which alerts humans) or rigid automation (which runs scripts), Sentry uses **Adaptive Thinking** to reason about unique errors and strictly defined **MCP Tools** to execute fixes.
+Claude Sentry is a "Self-Healing Server Monitor" that uses **Anthropic Claude LLMs** to diagnose and fix infrastructure incidents. Unlike traditional monitoring (which alerts humans) or rigid automation (which runs scripts), Sentry uses **Adaptive Thinking** to reason about unique errors and strictly defined **MCP Tools** to execute fixes.
+
+> **Model Flexibility:** The model is fully configurable via `ANTHROPIC_MODEL` or `BEDROCK_GATEWAY_MODEL` environment variables. While the system defaults to Claude Opus 4 and is optimized for its extended thinking capabilities, any compatible Claude model (Opus, Sonnet, Haiku) can be used. The adaptive effort system (`low`/`medium`/`high`/`disabled`) adjusts reasoning depth regardless of the underlying model.
 
 ### 1.1 Goals
 
@@ -17,7 +19,7 @@ Claude Sentry is a "Self-Healing Server Monitor" that uses **Anthropic Claude Op
 
 ### 1.3 Implementation Status
 
-✅ **Fully implemented** with 165 passing tests, Docker microservice deployment, React dashboard, and Zero Trust security. See Section 10 for implementation details.
+✅ **Fully implemented** with 165 passing tests, Docker microservice deployment, React dashboard, Zero Trust security, and Service Awareness Layer. See Section 11 for implementation details.
 
 ---
 
@@ -89,11 +91,11 @@ graph TB
 
 ## 3. Key Design Decisions
 
-### 3.1 Decision: Single Model (Opus 4.6) vs. Multi-Model
+### 3.1 Decision: Single Configurable Model vs. Multi-Model Pipeline
 
 * **Alternative:** Use Haiku for triage and Opus for fixing.
-* **Decision:** Use **Opus 4.6 exclusively** with `effort` control.
-* **Reasoning:** Handing off context between a "dumb" model and a "smart" model results in loss of nuance (the "Chinese Whispers" effect). Opus 4.6 allows us to scale compute up or down *within the same context window*.
+* **Decision:** Use a **single configurable model** (defaulting to Opus 4) with `effort` control. The model is set via `ANTHROPIC_MODEL` or `BEDROCK_GATEWAY_MODEL` environment variables, allowing operators to choose any compatible Claude model.
+* **Reasoning:** Handing off context between a "dumb" model and a "smart" model results in loss of nuance (the "Chinese Whispers" effect). A single model with adaptive effort allows us to scale compute up or down *within the same context window*. Operators who need cost efficiency can use Sonnet/Haiku; those who need maximum reasoning can use Opus.
 
 ### 3.2 Decision: MCP vs. Direct Shell
 
@@ -300,30 +302,124 @@ The implementation goes far beyond the original 3 guardrails. We implemented a f
 
 ---
 
-## 9. Future Work
+## 9. Service Awareness Layer (Implemented)
 
-* **Slack Integration:** Allow the user to "Chat with Sentry" to ask "Why did you restart the server?"
-* **Vector Database:** Migrate `sentry_memory.json` to a local vector store (like ChromaDB) if incident history exceeds 1,000 items.
+A critical architectural insight: **a self-healing monitor is useless if it doesn't understand what it's monitoring.** Without service knowledge, the AI agents receive a raw log line and must figure out everything from scratch — what service produced it, what its dependencies are, what "healthy" looks like, and how to fix it.
+
+The Service Awareness Layer solves this by giving agents a structured model of the monitored infrastructure.
+
+### 9.1 Architecture
+
+```
+service_config.yaml
+    │
+    ▼
+ServiceRegistry (loads on startup)
+    ├── ServiceDefinition[]     ← name, type, logs, configs, ports, processes
+    ├── HealthCheck[]           ← per-service health commands + intervals
+    ├── ServiceDependency[]     ← directed dependency graph (requires/optional)
+    ├── KnownErrorPattern[]     ← regex → explanation mapping
+    └── Runbook[]               ← ordered remediation steps
+```
+
+### 9.2 Data Flow
+
+1. **Startup:** Orchestrator loads `service_config.yaml` → `ServiceRegistry` → populates `system_fingerprint` in memory store with real topology (services, ports, dependencies)
+2. **Per Incident:** When a log event triggers, the engine matches `source_file` to a service via glob patterns, then builds a rich context string containing:
+   - Service description, type, config files, ports, processes
+   - Known error pattern matches (regex matched against the log line)
+   - Ordered runbook steps
+   - Full dependency chain with health check commands
+3. **Agent Prompts:** The `service_context` is injected into triage and diagnosis prompts so agents make **informed decisions** rather than blind guesses
+
+### 9.3 Service Definition Schema
+
+Each service is defined in YAML with the following fields:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | ✅ | Unique service identifier |
+| `service_type` | ✅ | Enum: `web_server`, `app_server`, `database`, `cache`, `queue`, `proxy`, `custom` |
+| `description` | ✅ | Human-readable description of what the service does |
+| `log_files` | ✅ | Glob patterns for log files this service writes to |
+| `config_files` | | Configuration file paths |
+| `ports` | | Network ports the service listens on |
+| `processes` | | Process names to look for in `ps` output |
+| `systemd_unit` | | Systemd service name for restart/status commands |
+| `health_check` | | Command + interval for health verification |
+| `dependencies` | | List of other services this service depends on (with relationship type) |
+| `known_error_patterns` | | Regex patterns mapped to explanations |
+| `runbook` | | Ordered list of remediation steps |
+| `restart_command` | | Custom restart command |
+| `reload_command` | | Graceful reload command |
+| `notes` | | Free-form operational notes |
+
+### 9.4 Key Capabilities
+
+| Capability | Method | Description |
+|-----------|--------|-------------|
+| **Log-to-Service Matching** | `match_log_file(path)` | Given a log file path, finds which service owns it via glob matching |
+| **Error Pattern Recognition** | `match_error_pattern(line, svc)` | Matches log content against known error patterns → returns explanation |
+| **Dependency Resolution** | `get_dependency_chain(name)` | Recursively resolves the full dependency chain for a service |
+| **Impact Analysis** | `get_affected_services(name)` | Finds all services that depend on a given service (reverse lookup) |
+| **Topology Fingerprint** | `build_topology_fingerprint()` | Generates a system-wide topology summary for the memory store |
+| **Incident Context** | `build_service_context_for_incident()` | Builds the full rich context string injected into agent prompts |
+
+### 9.5 Example: What Agents See
+
+When an "upstream timed out" error appears in `watched/nginx-error.log`, the agents receive:
+
+```
+=== Service: Nginx Reverse Proxy ===
+Type: web_server
+Description: Nginx reverse proxy serving static files and forwarding API requests...
+Log files: /var/log/nginx/*.log, watched/nginx-error.log
+Config files: /etc/nginx/nginx.conf, watched/config/nginx.conf
+Ports: 80, 443
+Dependencies: app-server (requires)
+Restart: systemctl restart nginx
+Runbook steps:
+  1. Check nginx error log: tail -100 /var/log/nginx/error.log
+  2. Validate config syntax: nginx -t
+  3. Check if upstream (app-server) is responding: curl localhost:8080/health
+⚡ Known error pattern match: Backend app server is slow or not responding
+Dependency chain:
+  - Backend API Server (app_server) → Health check: curl -sf http://localhost:8080/health
+  - PostgreSQL Database (database) → Health check: pg_isready -h localhost -p 5432
+  - Redis Cache (cache) → Health check: redis-cli ping
+```
+
+This transforms the AI agent from "here's a random log line, figure it out" to "here's exactly what service is affected, what it depends on, and the step-by-step runbook to fix it."
 
 ---
 
-## 10. Implementation Details
+## 10. Future Work
+
+* **Slack Integration:** Allow the user to "Chat with Sentry" to ask "Why did you restart the server?"
+* **Vector Database:** Migrate `sentry_memory.json` to a local vector store (like ChromaDB) if incident history exceeds 1,000 items.
+* **Auto-Discovery:** Automatically discover services via Docker labels, systemd units, or Kubernetes annotations instead of manual YAML configuration.
+* **Health Baseline Learning:** Collect health check metrics over time to establish "normal" baselines and detect anomalies.
+* **Service-Specific Memory:** Link incident history entries to specific services for better pattern recognition within service context.
+
+---
+
+## 11. Implementation Details
 
 This section documents what was actually built vs. the original design.
 
-### 10.1 Technology Stack
+### 11.1 Technology Stack
 
 | Component | Technology | Notes |
 |-----------|-----------|-------|
 | **Backend** | Python 3.12 + FastAPI | REST API gateway, async throughout |
 | **Frontend** | React 18 + Vite | Single-page dark-mode dashboard |
-| **LLM** | Anthropic Claude Opus 4.6 | Via direct API or AWS Bedrock Gateway |
+| **LLM** | Anthropic Claude (configurable — defaults to Opus 4) | Via direct API or AWS Bedrock Gateway; model set via env vars |
 | **Orchestrator** | LangGraph-style state machine | Custom `IncidentGraph` with typed state |
 | **Container** | Docker Compose | 2 services: backend (:8000), frontend (:3000) |
 | **Testing** | pytest + pytest-asyncio | 165 tests, TDD approach |
 | **Reverse Proxy** | nginx | Frontend serves static + proxies `/api` |
 
-### 10.2 Multi-Agent Architecture
+### 11.2 Multi-Agent Architecture
 
 The implementation evolved from the original single-orchestrator design to a **multi-agent pipeline** inspired by OWASP Non-Human Identity (NHI) guidelines:
 
@@ -352,7 +448,7 @@ Each agent has:
 | `apply_patch` | ✅ | ❌ | ❌ | ✅ | ❌ |
 | `restart_service` | ✅ | ❌ | ❌ | ✅ | ❌ |
 
-### 10.3 LLM Provider Abstraction
+### 11.3 LLM Provider Abstraction
 
 Supports two backends via a factory pattern (`create_llm_client()`):
 
@@ -361,7 +457,7 @@ Supports two backends via a factory pattern (`create_llm_client()`):
 
 Both implement the `ILLMClient` interface (SOLID — Dependency Inversion).
 
-### 10.4 SOLID Principles Applied
+### 11.4 SOLID Principles Applied
 
 | Principle | Implementation |
 |-----------|---------------|
@@ -371,7 +467,7 @@ Both implement the `ILLMClient` interface (SOLID — Dependency Inversion).
 | **Interface Segregation** | Separate `ILLMClient`, `IMemoryStore`, `IToolExecutor` interfaces |
 | **Dependency Inversion** | Agents depend on abstractions (`IVault`), not concrete `LocalVault` |
 
-### 10.5 Test Coverage
+### 11.5 Test Coverage
 
 **165 tests across 9 test files:**
 
@@ -387,7 +483,7 @@ Both implement the `ILLMClient` interface (SOLID — Dependency Inversion).
 | `test_circuit_breaker.py` | 10 | Cost tracking, rate limiting, auto-halt |
 | `test_api.py` | 12 | Health, status, incidents, trigger, watcher endpoints |
 
-### 10.6 Docker Deployment
+### 11.6 Docker Deployment
 
 ```yaml
 # Two-container microservice architecture
@@ -398,7 +494,7 @@ services:
 
 Both containers run with `security_opt: no-new-privileges:true`.
 
-### 10.7 Dashboard Features
+### 11.7 Dashboard Features
 
 The React frontend provides:
 - **System Status Cards** — Active incidents, resolved count, API cost, circuit breaker

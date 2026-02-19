@@ -18,7 +18,7 @@ from backend.shared.vault import AgentRole, IVault
 from backend.shared.ai_gateway import AIGateway
 from backend.shared.agent_throttle import AgentThrottle
 from backend.shared.tool_registry import TrustedToolRegistry
-from backend.shared.models import Incident
+from backend.shared.models import Incident, ToolCall
 
 logger = logging.getLogger(__name__)
 
@@ -78,10 +78,13 @@ class SurgeonAgent(BaseAgent):
                 f"Mode: {self._config.security.mode.value}"
             )
 
+            # Bug fix #1: ILLMClient.analyze() signature is (prompt, effort, tools).
+            full_prompt = f"{SURGEON_SYSTEM_PROMPT}\n\nApply a fix for this incident:\n\n{context}"
+            tool_defs = self._tools.get_tool_definitions() if hasattr(self._tools, 'get_tool_definitions') else None
             response = await self._llm.analyze(
-                system_prompt=SURGEON_SYSTEM_PROMPT,
-                user_message=f"Apply a fix for this incident:\n\n{context}",
-                thinking={"type": "enabled", "budget_tokens": 5000},
+                prompt=full_prompt,
+                effort="medium",
+                tools=tool_defs,
             )
 
             text = response.get("text", "")
@@ -100,8 +103,10 @@ class SurgeonAgent(BaseAgent):
                     logger.warning(f"Surgeon {self.agent_id} throttled")
                     break
 
+                # Bug fix #2: IToolExecutor.execute() takes a single ToolCall object.
                 try:
-                    result = await self._tools.execute(tool_name, tool_args)
+                    call = ToolCall(tool_name=tool_name, arguments=tool_args)
+                    result = await self._tools.execute(call)
                     tool_results.append({
                         "tool": tool_name,
                         "success": result.success,

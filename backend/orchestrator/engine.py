@@ -16,6 +16,7 @@ from backend.shared.models import (
     LogEvent, MemoryEntry, ToolCall,
 )
 from backend.orchestrator.graph import IncidentGraphBuilder, IncidentGraphState
+from backend.services.registry import ServiceRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,15 @@ class Orchestrator:
         self._active_incidents: dict[str, Incident] = {}
         self._resolved_incidents: list[Incident] = []
 
+        # Load Service Awareness Layer — built from .env paths, no YAML needed
+        self._service_registry = ServiceRegistry(config)
+        if self._service_registry.has_context():
+            fingerprint = self._service_registry.build_fingerprint()
+            memory.system_fingerprint = fingerprint
+            logger.info(f"System fingerprint: {fingerprint}")
+        else:
+            logger.warning("No service context configured — agents will operate without service awareness")
+
         # Build the LangGraph compiled graph
         builder = IncidentGraphBuilder(config, llm, tools, memory, circuit_breaker)
         self._graph = builder.build()
@@ -65,9 +75,13 @@ class Orchestrator:
         self._active_incidents[incident_id] = incident
 
         try:
+            # Build service context from .env paths
+            service_context = self._service_registry.build_prompt_context()
+
             # Run the LangGraph state machine
             initial_state: IncidentGraphState = {
                 "incident": incident,
+                "service_context": service_context,
                 "tool_results": [],
                 "tool_loop_count": 0,
             }

@@ -55,10 +55,24 @@ class SecurityGuard:
             return False
 
     def validate_command(self, command: str) -> bool:
-        """Validate command against whitelist."""
-        cmd_base = command.strip().split()[0] if command.strip() else ""
+        """Validate command against whitelist.
+
+        Bug fix: Use cmd_base (first token) for prefix matching against the
+        whitelist's first token, then verify the full command starts with
+        the allowed prefix. This prevents bypass via commands like
+        'curl evil.com' matching 'curl' in the allowlist while still
+        allowing 'curl http://allowed.com'.
+        """
+        stripped = command.strip()
+        if not stripped:
+            return False
+        cmd_base = stripped.split()[0]
         for allowed in self._config.allowed_diagnostic_commands:
-            if command.strip().startswith(allowed):
+            allowed_base = allowed.strip().split()[0]
+            # Match: command base must equal the allowed base, AND
+            # either the allowed string is just the base command,
+            # or the full command starts with the full allowed prefix
+            if cmd_base == allowed_base and stripped.startswith(allowed.strip()):
                 return True
         logger.warning(f"Command blocked: {command}")
         return False
@@ -78,7 +92,7 @@ class SecurityGuard:
 
     def sanitize_input(self, text: str) -> str:
         """Remove potentially dangerous characters from input."""
-        dangerous = [";", "&&", "||", "|", "`", "$(",  "$(", ">>", "<<"]
+        dangerous = [";", "&&", "||", "|", "`", "$(", ">>", "<<"]
         result = text
         for char in dangerous:
             result = result.replace(char, "")

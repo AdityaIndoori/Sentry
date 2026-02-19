@@ -82,10 +82,15 @@ class RateLimiter:
                 f"Rate limited: {key} - {remaining:.0f}s remaining"
             )
             return False
+        # Bug fix #9: Automatically record the action when check passes.
+        # Previously, callers had to manually call record() after is_allowed(),
+        # but failed attempts (e.g., failed restarts) never called record(),
+        # allowing unlimited rapid retries of failing operations.
+        self._last_call[key] = now
         return True
 
     def record(self, key: str) -> None:
-        """Record that an action was taken."""
+        """Record that an action was taken (also called by is_allowed on success)."""
         self._last_call[key] = time.time()
 
     def get_remaining(self, key: str, cooldown_seconds: int) -> float:

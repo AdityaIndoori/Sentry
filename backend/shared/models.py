@@ -125,6 +125,17 @@ class Incident:
         self.activity_log.append(entry)
 
     def to_dict(self) -> dict:
+        # Bug fix #13: log_events may contain LogEvent objects or dicts.
+        # Ensure all entries are serializable dicts.
+        serialized_log_events = []
+        for evt in self.log_events:
+            if isinstance(evt, dict):
+                serialized_log_events.append(evt)
+            elif hasattr(evt, 'to_dict'):
+                serialized_log_events.append(evt.to_dict())
+            else:
+                serialized_log_events.append(str(evt))
+
         return {
             "id": self.id,
             "symptom": self.symptom,
@@ -133,6 +144,7 @@ class Incident:
             "root_cause": self.root_cause,
             "fix_applied": self.fix_applied,
             "triage_result": self.triage_result,
+            "log_events": serialized_log_events,
             "created_at": self.created_at.isoformat(),
             "resolved_at": self.resolved_at.isoformat() if self.resolved_at else None,
             "retry_count": self.retry_count,
@@ -144,7 +156,12 @@ class Incident:
         }
 
     def _phase_summary(self) -> dict:
-        """Summarize the status of each phase for the progress stepper."""
+        """Summarize the status of each phase for the progress stepper.
+
+        Bug fix #4: resolved/escalated are terminal states, not phases.
+        When resolved, all 4 phases should be marked complete.
+        When escalated, phases up to current should be complete, current is 'error'.
+        """
         phases = ["triage", "diagnosis", "remediation", "verification"]
         state_order = {
             "idle": -1, "triage": 0, "diagnosis": 1,
@@ -160,11 +177,14 @@ class Incident:
                 summary[phase] = "active"
             else:
                 summary[phase] = "pending"
-        # Mark resolved/escalated
+        # Terminal states: mark outcome without adding extra phase keys
         if self.state == IncidentState.RESOLVED:
-            summary["resolved"] = "complete"
+            # All phases are done
+            for phase in phases:
+                summary[phase] = "complete"
+            summary["outcome"] = "resolved"
         elif self.state == IncidentState.ESCALATED:
-            summary["escalated"] = "complete"
+            summary["outcome"] = "escalated"
         return summary
 
 

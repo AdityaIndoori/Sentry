@@ -100,6 +100,7 @@ class AppConfig:
     llm_provider: LLMProvider = LLMProvider.ANTHROPIC
     watcher: WatcherConfig = field(default_factory=WatcherConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    service_source_path: str = "/app/workspace"
     api_host: str = "0.0.0.0"
     api_port: int = 8000
     log_level: str = "INFO"
@@ -164,6 +165,7 @@ def load_config() -> AppConfig:
         llm_provider=llm_provider,
         watcher=watcher,
         memory=memory,
+        service_source_path=os.environ.get("SERVICE_SOURCE_PATH", "/app/workspace"),
         api_host=os.environ.get("API_HOST", "0.0.0.0"),
         api_port=int(os.environ.get("API_PORT", "8000")),
         log_level=os.environ.get("LOG_LEVEL", "INFO"),

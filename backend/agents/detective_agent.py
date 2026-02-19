@@ -17,7 +17,7 @@ from backend.shared.vault import AgentRole, IVault
 from backend.shared.ai_gateway import AIGateway
 from backend.shared.agent_throttle import AgentThrottle
 from backend.shared.tool_registry import TrustedToolRegistry
-from backend.shared.models import Incident, ToolResult
+from backend.shared.models import Incident, ToolCall, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -84,10 +84,15 @@ class DetectiveAgent(BaseAgent):
                     logger.warning(f"Detective {self.agent_id} throttled at loop {loop_idx}")
                     break
 
+                # Bug fix #1: ILLMClient.analyze() signature is (prompt, effort, tools).
+                # Combine system prompt + messages into a single prompt string.
+                full_prompt = f"{DETECTIVE_SYSTEM_PROMPT}\n\n" + "\n\n".join(messages)
+                # Get tool definitions for the LLM to use
+                tool_defs = self._tools.get_tool_definitions() if hasattr(self._tools, 'get_tool_definitions') else None
                 response = await self._llm.analyze(
-                    system_prompt=DETECTIVE_SYSTEM_PROMPT,
-                    user_message="\n\n".join(messages),
-                    thinking={"type": "enabled", "budget_tokens": 10000},
+                    prompt=full_prompt,
+                    effort="high",
+                    tools=tool_defs,
                 )
 
                 text = response.get("text", "")
@@ -119,9 +124,11 @@ class DetectiveAgent(BaseAgent):
                         messages.append("Tool error: Throttle limit reached")
                         break
 
-                    # Execute via MCP executor
+                    # Bug fix #2: IToolExecutor.execute() takes a single ToolCall object,
+                    # not two separate arguments.
                     try:
-                        result = await self._tools.execute(tool_name, tool_args)
+                        call = ToolCall(tool_name=tool_name, arguments=tool_args)
+                        result = await self._tools.execute(call)
                         safe_output = self._scan_and_redact_output(result.output)
                         tool_results.append({
                             "tool": tool_name,
