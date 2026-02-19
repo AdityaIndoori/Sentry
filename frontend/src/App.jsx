@@ -963,6 +963,7 @@ function ConfigPanel({ config }) {
     {/* Secondary config row */}
     <div style={{
       display: 'flex', flexWrap: 'wrap', gap: '8px', fontSize: '11px',
+      justifyContent: 'center',
     }}>
       {[
         { label: 'Watch Paths', value: (config.watch_paths || []).join(', ') || 'none', color: c.textDim },
@@ -972,7 +973,7 @@ function ConfigPanel({ config }) {
         { label: 'Restart Cooldown', value: `${config.restart_cooldown || 600}s`, color: c.textDim },
         { label: 'Log Level', value: config.log_level || 'INFO', color: c.textDim },
       ].map((item, i) => (
-        <div key={i} style={{
+        <div key={i} title={String(item.value)} style={{
           padding: '5px 10px', borderRadius: '6px',
           background: c.surfaceAlt, border: `1px solid ${c.border}`,
           display: 'flex', gap: '6px', alignItems: 'center',
@@ -980,8 +981,7 @@ function ConfigPanel({ config }) {
           <span style={{ color: c.textFaint, fontWeight: 600 }}>{item.label}:</span>
           <span style={{
             color: item.color, fontFamily: "'JetBrains Mono', monospace",
-            fontWeight: 500, maxWidth: '200px', overflow: 'hidden',
-            textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            fontWeight: 500,
           }}>{item.value}</span>
         </div>
       ))}
