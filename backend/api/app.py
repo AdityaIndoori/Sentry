@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from backend.shared.circuit_breaker import CostCircuitBreaker
-from backend.shared.config import load_config
+from backend.shared.config import load_config, LLMProvider
 from backend.shared.models import LogEvent
 from backend.shared.security import SecurityGuard
 from backend.shared.vault import LocalVault, AgentRole
@@ -217,18 +217,18 @@ async def get_config():
 
     # Determine provider and model
     provider = _config.llm_provider
-    if provider == "bedrock_gateway":
+    if provider == LLMProvider.BEDROCK_GATEWAY:
         model = _config.bedrock_gateway.model if hasattr(_config, 'bedrock_gateway') and _config.bedrock_gateway else "unknown"
     else:
         model = _config.anthropic.model if hasattr(_config, 'anthropic') and _config.anthropic else "unknown"
 
     return {
-        "llm_provider": provider,
+        "llm_provider": provider.value,
         "model": model,
         "mode": _config.security.mode.value,
         "service_source_path": _config.security.project_root,
         "watch_paths": _config.watcher.watch_paths,
-        "poll_interval": _config.watcher.poll_interval,
+        "poll_interval": _config.watcher.poll_interval_seconds,
         "max_cost_10min": _config.security.max_cost_per_10min_usd,
         "max_retries": _config.security.max_retries,
         "restart_cooldown": _config.security.restart_cooldown_seconds,

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
+/* Sentry UI v2 */
 
 const API = '/api'
 
