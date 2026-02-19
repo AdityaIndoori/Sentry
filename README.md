@@ -1,4 +1,4 @@
-# 🛡️ Claude Sentry — Self-Healing Server Monitor
+# 🛡️ Sentry — Self-Healing Server Monitor
 
 An autonomous AI service monitor. It uses a **multi-agent pipeline** to continuously monitor logs, diagnose errors, and fix them automatically. Agents interact through a **LangGraph orchestrator**, execute actions via secure **MCP (Model Context Protocol) tools**, and are governed by a **Zero Trust security** layer with 15 defense-in-depth controls.
 
@@ -114,6 +114,32 @@ flowchart TB
     style Tools fill:#1c1c1c,stroke:#58a6ff,color:#79c0ff
     style ZeroTrust fill:#1c1c1c,stroke:#f85149,color:#ff7b72
 ```
+
+## Screenshots
+
+### Dashboard Overview
+Real-time monitoring with active/resolved incident counts, API cost tracking, circuit breaker status, and manual trigger input.
+
+![Dashboard Overview](docs/screenshots/dashboard-overview.png)
+
+### Agent Roles & Active Incidents
+The multi-agent pipeline (Supervisor → Triage → Detective → Surgeon → Validator) with least-privilege tool permissions. Active incidents show the 4-phase progress tracker with live status updates.
+
+![Incidents and Agents](docs/screenshots/incidents-and-agents.png)
+
+### Long-Term Memory & MCP Tools
+Incident memory store for pattern matching across past incidents, and the full MCP tool registry split by permission level (read-only vs active).
+
+![Memory and Tools](docs/screenshots/memory-and-tools.png)
+
+<details>
+<summary>📸 Full Dashboard (click to expand)</summary>
+
+![Full Dashboard](docs/screenshots/full-dashboard.png)
+
+</details>
+
+---
 
 ### How It Works (End-to-End Flow)
 
