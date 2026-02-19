@@ -1,7 +1,7 @@
 """
 Service context — minimal model for service awareness.
 
-Claude Sentry learns about the monitored service by reading its source code
+Sentry learns about the monitored service by reading its source code
 and logs at runtime. The user only provides two paths in .env:
   - SERVICE_SOURCE_PATH: where the service source code lives
   - WATCH_PATHS: where the service logs are

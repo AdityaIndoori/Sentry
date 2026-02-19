@@ -1,1 +1,1 @@
-# Shared utilities and interfaces for Claude Sentry microservices
+# Shared utilities and interfaces for Sentry microservices

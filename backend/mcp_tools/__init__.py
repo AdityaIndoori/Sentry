@@ -1,1 +1,1 @@
-# MCP Tools microservice for Claude Sentry
+# MCP Tools microservice for Sentry

@@ -1,5 +1,5 @@
 """
-Domain models for Claude Sentry.
+Domain models for Sentry.
 Pure data classes with no external dependencies (Clean Architecture inner layer).
 """
 
@@ -254,7 +254,7 @@ class CostTracker:
     total_output_tokens: int = 0
     window_start: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
-    # Opus 4.6 pricing (approximate)
+    # Claude pricing (approximate)
     INPUT_COST_PER_1K: float = 0.015
     OUTPUT_COST_PER_1K: float = 0.075
 

@@ -1,1 +1,1 @@
-# API gateway for Claude Sentry
+# API gateway for Sentry

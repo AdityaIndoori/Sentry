@@ -22,7 +22,7 @@ from backend.shared.models import Incident, ToolCall
 
 logger = logging.getLogger(__name__)
 
-SURGEON_SYSTEM_PROMPT = """You are the Surgeon Agent for Claude Sentry, a self-healing server monitor.
+SURGEON_SYSTEM_PROMPT = """You are the Surgeon Agent for Sentry, a self-healing server monitor.
 
 You have been given a diagnosis with root cause and recommended fix.
 Your job is to propose the EXACT fix to apply.

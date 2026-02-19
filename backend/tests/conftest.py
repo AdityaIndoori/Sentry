@@ -1,5 +1,5 @@
 """
-Shared test fixtures for Claude Sentry test suite.
+Shared test fixtures for Sentry test suite.
 """
 
 import os

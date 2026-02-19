@@ -1,1 +1,1 @@
-# Claude Sentry Backend
+# Sentry Backend

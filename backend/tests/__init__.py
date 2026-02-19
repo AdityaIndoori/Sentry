@@ -1,1 +1,1 @@
-# Tests for Claude Sentry
+# Tests for Sentry

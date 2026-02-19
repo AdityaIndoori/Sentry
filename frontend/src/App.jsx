@@ -137,10 +137,10 @@ function Header({ status, onRefresh }) {
       <span style={{ fontSize: '26px' }}>🛡️</span>
       <div>
         <div style={{ fontSize: '18px', fontWeight: 800, color: c.text, letterSpacing: '-0.5px' }}>
-          Claude Sentry
+          Sentry
         </div>
         <div style={{ fontSize: '11px', color: c.textFaint, fontWeight: 500 }}>
-          Self-Healing Server Monitor • Opus 4.6
+          Self-Healing Server Monitor
         </div>
       </div>
     </div>
@@ -890,6 +890,105 @@ function SecurityPanel({ security }) {
 }
 
 /* ══════════════════════════════════════════════════════════
+   CONFIG PANEL — System Configuration at a glance
+   ══════════════════════════════════════════════════════════ */
+function ConfigPanel({ config }) {
+  if (!config) return null
+
+  const providerLabel = {
+    bedrock_gateway: 'AWS Bedrock Gateway',
+    anthropic: 'Anthropic Direct',
+  }[config.llm_provider] || config.llm_provider
+
+  // Shorten model name for display
+  const shortModel = (config.model || 'unknown')
+    .replace('global.anthropic.', '')
+    .replace('claude-', 'Claude ')
+    .replace(/-v\d+$/, '')
+
+  const modeColor = config.mode === 'ACTIVE' ? c.green : config.mode === 'AUDIT' ? c.orange : c.red
+
+  return <Card style={{ marginBottom: '20px' }}>
+    <SectionTitle icon="⚙">System Configuration</SectionTitle>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '12px' }}>
+      {/* LLM Provider */}
+      <div style={{
+        padding: '14px', borderRadius: '10px', background: c.bg,
+        border: `1px solid ${c.border}`, textAlign: 'center',
+      }}>
+        <div style={{ fontSize: '10px', fontWeight: 700, color: c.textFaint, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+          LLM Provider
+        </div>
+        <div style={{ fontSize: '15px', fontWeight: 700, color: c.accent }}>{providerLabel}</div>
+        <div style={{
+          fontSize: '10px', color: c.textDim, marginTop: '4px',
+          fontFamily: "'JetBrains Mono', monospace",
+        }}>{shortModel}</div>
+      </div>
+
+      {/* Monitored Service */}
+      <div style={{
+        padding: '14px', borderRadius: '10px', background: c.bg,
+        border: `1px solid ${c.border}`, textAlign: 'center',
+      }}>
+        <div style={{ fontSize: '10px', fontWeight: 700, color: c.textFaint, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+          Monitored Service
+        </div>
+        <div style={{
+          fontSize: '13px', fontWeight: 700, color: c.cyan,
+          fontFamily: "'JetBrains Mono', monospace",
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>{config.service_source_path || '/app/workspace'}</div>
+        <div style={{ fontSize: '10px', color: c.textDim, marginTop: '4px' }}>
+          {(config.watch_paths || []).length} watch path{(config.watch_paths || []).length !== 1 ? 's' : ''}
+        </div>
+      </div>
+
+      {/* Operating Mode */}
+      <div style={{
+        padding: '14px', borderRadius: '10px', background: c.bg,
+        border: `1px solid ${modeColor}30`, textAlign: 'center',
+      }}>
+        <div style={{ fontSize: '10px', fontWeight: 700, color: c.textFaint, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+          Operating Mode
+        </div>
+        <div style={{ fontSize: '20px', fontWeight: 800, color: modeColor }}>{config.mode}</div>
+        <div style={{ fontSize: '10px', color: c.textDim, marginTop: '4px' }}>
+          {config.mode === 'ACTIVE' ? 'Full autonomous operation' : config.mode === 'AUDIT' ? 'Log only, no execution' : 'All actions disabled'}
+        </div>
+      </div>
+    </div>
+
+    {/* Secondary config row */}
+    <div style={{
+      display: 'flex', flexWrap: 'wrap', gap: '8px', fontSize: '11px',
+    }}>
+      {[
+        { label: 'Watch Paths', value: (config.watch_paths || []).join(', ') || 'none', color: c.textDim },
+        { label: 'Poll Interval', value: `${config.poll_interval || 5}s`, color: c.textDim },
+        { label: 'Cost Limit', value: `$${config.max_cost_10min || 5}/10min`, color: c.textDim },
+        { label: 'Max Retries', value: config.max_retries || 3, color: c.textDim },
+        { label: 'Restart Cooldown', value: `${config.restart_cooldown || 600}s`, color: c.textDim },
+        { label: 'Log Level', value: config.log_level || 'INFO', color: c.textDim },
+      ].map((item, i) => (
+        <div key={i} style={{
+          padding: '5px 10px', borderRadius: '6px',
+          background: c.surfaceAlt, border: `1px solid ${c.border}`,
+          display: 'flex', gap: '6px', alignItems: 'center',
+        }}>
+          <span style={{ color: c.textFaint, fontWeight: 600 }}>{item.label}:</span>
+          <span style={{
+            color: item.color, fontFamily: "'JetBrains Mono', monospace",
+            fontWeight: 500, maxWidth: '200px', overflow: 'hidden',
+            textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{item.value}</span>
+        </div>
+      ))}
+    </div>
+  </Card>
+}
+
+/* ══════════════════════════════════════════════════════════
    MAIN APP
    ══════════════════════════════════════════════════════════ */
 export default function App() {
@@ -898,6 +997,7 @@ export default function App() {
   const { data: memory, refresh: refreshMem } = useApi('/memory', 10000)
   const { data: tools } = useApi('/tools')
   const { data: security } = useApi('/security', 15000)
+  const { data: config } = useApi('/config')
 
   const refreshAll = () => { refreshStatus(); refreshInc(); refreshMem() }
 
@@ -908,6 +1008,9 @@ export default function App() {
     <main style={{ maxWidth: '1440px', margin: '0 auto', padding: '20px 28px' }}>
       {/* Status Metrics Row */}
       <StatusRow status={status} />
+
+      {/* System Configuration */}
+      <ConfigPanel config={config} />
 
       {/* Watcher + Trigger */}
       <div style={{
@@ -940,7 +1043,7 @@ export default function App() {
       fontSize: '11px', borderTop: `1px solid ${c.border}`,
       marginTop: '40px',
     }}>
-      Claude Sentry v1.0 — Powered by Anthropic Claude Opus 4.6 — Zero Trust Security
+      Sentry v1.0 — Self-Healing Server Monitor — Zero Trust Security
     </footer>
   </div>
 }

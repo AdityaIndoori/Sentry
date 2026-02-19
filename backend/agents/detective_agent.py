@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 MAX_TOOL_LOOPS = 8
 
-DETECTIVE_SYSTEM_PROMPT = """You are the Detective Agent for Claude Sentry, a self-healing server monitor.
+DETECTIVE_SYSTEM_PROMPT = """You are the Detective Agent for Sentry, a self-healing server monitor.
 
 Your job is to investigate the ROOT CAUSE of an incident. You have access to read-only tools:
 - read_file(path): Read a file on the server

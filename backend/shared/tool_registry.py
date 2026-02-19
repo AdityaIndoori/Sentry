@@ -88,7 +88,7 @@ class TrustedToolRegistry:
 
 def create_default_registry() -> TrustedToolRegistry:
     """
-    Factory: create the standard Claude Sentry tool registry
+    Factory: create the standard Sentry tool registry
     with role-based access as defined in the design doc.
 
     Role mapping (least privilege):

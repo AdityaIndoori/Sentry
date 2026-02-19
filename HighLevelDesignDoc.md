@@ -1,15 +1,15 @@
-# Design Doc: Claude Sentry (v1.0)
+# Design Doc: Sentry (v1.0)
 
 ## 1. Executive Summary
 
-Claude Sentry is a "Self-Healing Server Monitor" that uses **Anthropic Claude LLMs** to diagnose and fix infrastructure incidents. Unlike traditional monitoring (which alerts humans) or rigid automation (which runs scripts), Sentry uses **Adaptive Thinking** to reason about unique errors and strictly defined **MCP Tools** to execute fixes.
+Sentry is a "Self-Healing Server Monitor" that uses **Anthropic Claude LLMs** to diagnose and fix infrastructure incidents. Unlike traditional monitoring (which alerts humans) or rigid automation (which runs scripts), Sentry uses **Adaptive Thinking** to reason about unique errors and strictly defined **MCP Tools** to execute fixes.
 
 > **Model Flexibility:** The model is fully configurable via `ANTHROPIC_MODEL` or `BEDROCK_GATEWAY_MODEL` environment variables. While the system defaults to Claude Opus 4 and is optimized for its extended thinking capabilities, any compatible Claude model (Opus, Sonnet, Haiku) can be used. The adaptive effort system (`low`/`medium`/`high`/`disabled`) adjusts reasoning depth regardless of the underlying model.
 
 ### 1.1 Goals
 
 * **Autonomous Triage:** Reduce "PagerDuty" noise by 90% by resolving routine errors (disk space, service restarts) without human intervention.
-* **Context Continuity:** Maintain a long-running "memory" of server health using Opus 4.6’s 1M context window and context compaction.
+* **Context Continuity:** Maintain a long-running "memory" of server health using Claude’s 1M context window and context compaction.
 * **Safety First:** Prevent "hallucinated destructive commands" via strict MCP protocol and read-only default modes.
 
 ### 1.2 Non-Goals
@@ -35,13 +35,13 @@ This diagram illustrates how Sentry sits between the Administrator and the Serve
 graph TD
     User[System Administrator]
     
-    subgraph "Claude Sentry System"
+    subgraph "Sentry System"
         Sentry[Sentry Orchestrator]
     end
     
     subgraph "External Systems"
         Server[Target Server / Cloud]
-        Opus[Claude Opus 4.6 API]
+        Opus[Claude API]
         Notify[Slack / PagerDuty]
     end
 
@@ -71,7 +71,7 @@ graph TB
     end
 
     subgraph "The Brain"
-        API[Opus 4.6 API]
+        API[Claude API]
     end
 
     %% Flows
@@ -217,7 +217,7 @@ To enable "Self-Healing," we use a local JSON store that acts as RAG (Retrieval-
 ```
 
 **Context Compaction Logic:**
-Before every new session, the Orchestrator reads this JSON. If `incident_history` > 50 items, Opus 4.6 (Effort: High) is triggered to summarize similar incidents into generalized "Rules of Thumb" to save token space.
+Before every new session, the Orchestrator reads this JSON. If `incident_history` > 50 items, Claude (Effort: High) is triggered to summarize similar incidents into generalized "Rules of Thumb" to save token space.
 
 ---
 
@@ -231,7 +231,7 @@ sequenceDiagram
     participant App as Application
     participant Watch as Watcher
     participant Orch as Orchestrator
-    participant Opus as Opus 4.6 (API)
+    participant Opus as Claude (API)
     participant MCP as MCP Server
 
     App->>Watch: Writes "ConnectionRefusedError" to log

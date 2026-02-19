@@ -1,1 +1,1 @@
-# Memory store microservice for Claude Sentry
+# Memory store microservice for Sentry

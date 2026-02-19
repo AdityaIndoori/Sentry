@@ -1,6 +1,6 @@
 """
 Database configuration for production application.
-NOTE: This is a sample config file for Claude Sentry to investigate.
+NOTE: This is a sample config file for Sentry to investigate.
 """
 
 import os

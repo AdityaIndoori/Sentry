@@ -1,5 +1,5 @@
 """
-LLM client implementations for Claude Sentry.
+LLM client implementations for Sentry.
 Supports both direct Anthropic API and AWS Bedrock Access Gateway (OpenAI-compatible).
 Implements ILLMClient with adaptive thinking support.
 """
@@ -51,7 +51,7 @@ def _no_api_key_response() -> dict:
 # ---------------------------------------------------------------------------
 
 class OpusLLMClient(ILLMClient):
-    """Claude Opus 4.6 API client via direct Anthropic SDK."""
+    """Claude API client via direct Anthropic SDK."""
 
     def __init__(self, config: AnthropicConfig):
         self._config = config
@@ -176,7 +176,7 @@ class BedrockGatewayLLMClient(ILLMClient):
 
         # Build system prompt with effort hint so the model adapts depth
         system_prompt = (
-            f"You are Claude Sentry, an autonomous server monitoring agent. "
+            f"You are Sentry, an autonomous server monitoring agent. "
             f"Analysis effort level: {effort}. "
             f"If effort is 'low', be concise. If 'high', think deeply and explore all angles."
         )

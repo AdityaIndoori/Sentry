@@ -1,1 +1,1 @@
-# Log watcher microservice for Claude Sentry
+# Log watcher microservice for Sentry

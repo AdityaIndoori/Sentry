@@ -1,5 +1,5 @@
 """
-FastAPI application - API gateway for Claude Sentry dashboard.
+FastAPI application - API gateway for Sentry dashboard.
 Provides REST endpoints for the frontend UI.
 """
 
@@ -56,16 +56,16 @@ async def lifespan(app: FastAPI):
     _orchestrator = Orchestrator(_config, llm, tools, memory, cb)
     _watcher = LogWatcher(_config.watcher)
 
-    logger.info(f"Claude Sentry started in {_config.security.mode.value} mode")
+    logger.info(f"Sentry started in {_config.security.mode.value} mode")
     yield
     if _watcher:
         await _watcher.stop()
-    logger.info("Claude Sentry shutdown")
+    logger.info("Sentry shutdown")
 
 
 app = FastAPI(
-    title="Claude Sentry",
-    description="Self-Healing Server Monitor powered by Claude Opus 4.6",
+    title="Sentry",
+    description="Self-Healing Server Monitor",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -207,6 +207,34 @@ async def stop_watcher():
         _watcher_task.cancel()
         _watcher_task = None
     return {"status": "stopped"}
+
+
+@app.get("/api/config")
+async def get_config():
+    """Return safe configuration values for the dashboard (no API keys)."""
+    if not _config:
+        raise HTTPException(503, "Not ready")
+
+    # Determine provider and model
+    provider = _config.llm_provider
+    if provider == "bedrock_gateway":
+        model = _config.bedrock_gateway.model if hasattr(_config, 'bedrock_gateway') and _config.bedrock_gateway else "unknown"
+    else:
+        model = _config.anthropic.model if hasattr(_config, 'anthropic') and _config.anthropic else "unknown"
+
+    return {
+        "llm_provider": provider,
+        "model": model,
+        "mode": _config.security.mode.value,
+        "service_source_path": _config.security.project_root,
+        "watch_paths": _config.watcher.watch_paths,
+        "poll_interval": _config.watcher.poll_interval,
+        "max_cost_10min": _config.security.max_cost_per_10min_usd,
+        "max_retries": _config.security.max_retries,
+        "restart_cooldown": _config.security.restart_cooldown_seconds,
+        "log_level": _config.log_level,
+        "environment": _config.environment,
+    }
 
 
 @app.get("/api/security")

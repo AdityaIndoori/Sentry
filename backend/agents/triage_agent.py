@@ -20,7 +20,7 @@ from backend.shared.models import Incident, MemoryEntry
 
 logger = logging.getLogger(__name__)
 
-TRIAGE_SYSTEM_PROMPT = """You are the Triage Agent for Claude Sentry, a self-healing server monitor.
+TRIAGE_SYSTEM_PROMPT = """You are the Triage Agent for Sentry, a self-healing server monitor.
 
 Your ONLY job is to classify incoming error logs. You must respond with EXACTLY this format:
 

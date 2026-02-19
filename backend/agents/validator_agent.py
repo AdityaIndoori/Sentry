@@ -20,7 +20,7 @@ from backend.shared.models import Incident
 
 logger = logging.getLogger(__name__)
 
-VALIDATOR_SYSTEM_PROMPT = """You are the Validator Agent for Claude Sentry.
+VALIDATOR_SYSTEM_PROMPT = """You are the Validator Agent for Sentry.
 
 Your job is to verify whether a fix was successful.
 Analyze the incident symptom, the applied fix, and any diagnostic output.

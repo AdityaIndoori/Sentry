@@ -58,7 +58,7 @@ def _build_triage_prompt(incident: Incident, history: list, service_context: str
         svc_text = f"\n\n--- SERVICE CONTEXT (what this error relates to) ---\n{service_context}\n--- END SERVICE CONTEXT ---\n"
 
     return (
-        f"You are Claude Sentry, an autonomous server monitoring AI.\n"
+        f"You are Sentry, an autonomous server monitoring AI.\n"
         f"Triage this production error log entry:\n\n"
         f"ERROR: {incident.symptom}\n"
         f"{svc_text}"
@@ -229,9 +229,9 @@ class IncidentGraphBuilder:
 
             service_context = state.get("service_context", "")
             prompt = _build_triage_prompt(incident, relevant, service_context)
-            incident.current_agent_action = "Calling Claude Opus 4.6 (effort: low)..."
+            incident.current_agent_action = "Calling LLM (effort: low)..."
             incident.log_activity(ActivityType.LLM_CALL, "triage",
-                                  "Calling Claude Opus 4.6 for triage",
+                                  "Calling LLM for triage",
                                   metadata={"effort": "low"})
 
             response = await self._llm.analyze(prompt, effort="low")
@@ -314,7 +314,7 @@ class IncidentGraphBuilder:
                     incident.current_agent_action = None
                     return {**state, "incident": incident, "error": "circuit_breaker_tripped"}
 
-                incident.current_agent_action = f"Calling Claude Opus 4.6 (effort: high, loop {loop_idx+1}/{max_loops})..."
+                incident.current_agent_action = f"Calling LLM (effort: high, loop {loop_idx+1}/{max_loops})..."
                 incident.log_activity(ActivityType.LLM_CALL, "diagnosis",
                                       f"LLM call #{loop_idx+1} (effort: high)",
                                       metadata={"effort": "high", "loop": loop_idx+1})

@@ -1,5 +1,5 @@
 """
-Centralized configuration management for Claude Sentry.
+Centralized configuration management for Sentry.
 Uses environment variables with secure defaults following 12-factor app principles.
 """
 
@@ -11,7 +11,7 @@ from typing import FrozenSet
 
 
 class SentryMode(Enum):
-    """Operating modes for Claude Sentry."""
+    """Operating modes for Sentry."""
     ACTIVE = "ACTIVE"    # Full autonomous operation
     AUDIT = "AUDIT"      # Log-only mode for active tools
     DISABLED = "DISABLED" # All operations disabled

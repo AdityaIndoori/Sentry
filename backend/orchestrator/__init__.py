@@ -1,1 +1,1 @@
-# Orchestrator microservice for Claude Sentry
+# Orchestrator microservice for Sentry

@@ -1,5 +1,5 @@
 """
-Multi-Agent Architecture for Claude Sentry.
+Multi-Agent Architecture for Sentry.
 
 Each agent has:
 - A unique Non-Human Identity (NHI) from the Vault

@@ -1,5 +1,5 @@
 """
-Security module for Claude Sentry - Defense in Depth.
+Security module for Sentry - Defense in Depth.
 Handles path validation, command whitelisting, and mode enforcement.
 """
 

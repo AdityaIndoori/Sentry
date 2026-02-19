@@ -4,7 +4,7 @@ An autonomous AI service monitor. It uses a **multi-agent pipeline** to continuo
 
 ## Architecture
 
-The diagram below shows how data flows through Claude Sentry — from log detection to AI-driven resolution.
+The diagram below shows how data flows through Sentry — from log detection to AI-driven resolution.
 
 ```mermaid
 flowchart TB
@@ -189,7 +189,7 @@ python -m pytest -v
 
 ## LLM Providers
 
-Claude Sentry supports two LLM backends via a factory pattern. Set `LLM_PROVIDER` in your `.env`:
+Sentry supports two LLM backends via a factory pattern. Set `LLM_PROVIDER` in your `.env`:
 
 ### Option A: Direct Anthropic API (default)
 
@@ -282,7 +282,7 @@ Inspired by the OWASP "Non-Human Identity" guidelines. Each agent has:
 
 ## Service Awareness Layer
 
-Claude Sentry doesn't just watch logs blindly — it **understands what it's monitoring** by reading the service's source code.
+Sentry doesn't just watch logs blindly — it **understands what it's monitoring** by reading the service's source code.
 
 ### How It Works
 

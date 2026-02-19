@@ -1,5 +1,5 @@
 """
-Service Awareness Layer for Claude Sentry.
+Service Awareness Layer for Sentry.
 
 The user provides two paths in .env:
   - SERVICE_SOURCE_PATH: path to the service's source code

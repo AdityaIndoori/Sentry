@@ -1,5 +1,5 @@
 """
-Abstract interfaces (Ports) for Claude Sentry.
+Abstract interfaces (Ports) for Sentry.
 Following Dependency Inversion Principle - depend on abstractions, not concretions.
 """
 
