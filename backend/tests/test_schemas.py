@@ -1,11 +1,14 @@
 """
 TDD tests for Pydantic output schemas (structured LLM response parsing).
+Covers: parse_from_text() (regex tier 3), parse_safe() (JSON tier 2 + fallback),
+and _try_extract_json() helper.
 """
 
+import json
 import pytest
 from backend.orchestrator.schemas import (
     TriageResult, DiagnosisResult, RemediationResult,
-    VerificationResult, _clean_markdown,
+    VerificationResult, _clean_markdown, _try_extract_json,
 )
 
 
@@ -151,3 +154,162 @@ class TestCleanMarkdown:
 
     def test_preserves_normal_text(self):
         assert _clean_markdown("normal text") == "normal text"
+
+
+# ===========================================================================
+# Hardening tests: _try_extract_json() helper
+# ===========================================================================
+
+class TestTryExtractJson:
+    """Tests for the JSON extraction helper used by parse_safe() tier-2."""
+
+    def test_pure_json(self):
+        text = '{"severity": "high", "verdict": "INVESTIGATE", "summary": "DB down"}'
+        result = _try_extract_json(text)
+        assert result == {"severity": "high", "verdict": "INVESTIGATE", "summary": "DB down"}
+
+    def test_json_code_block(self):
+        text = 'Here is my analysis:\n```json\n{"severity": "critical", "verdict": "INVESTIGATE", "summary": "OOM"}\n```'
+        result = _try_extract_json(text)
+        assert result["severity"] == "critical"
+        assert result["summary"] == "OOM"
+
+    def test_code_block_without_json_tag(self):
+        text = '```\n{"resolved": true, "reason": "Service healthy"}\n```'
+        result = _try_extract_json(text)
+        assert result["resolved"] is True
+
+    def test_embedded_json_in_prose(self):
+        text = 'Based on my analysis, the result is {"root_cause": "OOM killer", "evidence": []} and that concludes it.'
+        result = _try_extract_json(text)
+        assert result["root_cause"] == "OOM killer"
+
+    def test_non_json_text_returns_none(self):
+        text = "This is just plain text with no JSON at all."
+        assert _try_extract_json(text) is None
+
+    def test_empty_string_returns_none(self):
+        assert _try_extract_json("") is None
+
+    def test_none_returns_none(self):
+        assert _try_extract_json(None) is None
+
+    def test_whitespace_only_returns_none(self):
+        assert _try_extract_json("   \n\t  ") is None
+
+    def test_array_json_returns_none(self):
+        """_try_extract_json only returns dicts, not arrays."""
+        text = '[1, 2, 3]'
+        assert _try_extract_json(text) is None
+
+    def test_malformed_json_returns_none(self):
+        text = '{"severity": "high", "verdict": INVESTIGATE}'  # unquoted value
+        assert _try_extract_json(text) is None
+
+
+# ===========================================================================
+# Hardening tests: parse_safe() — 3-tier validation (JSON → regex fallback)
+# ===========================================================================
+
+class TestTriageResultParseSafe:
+    """Tests for TriageResult.parse_safe() — tier 2 (JSON) + tier 3 (regex) fallback."""
+
+    def test_valid_json_object(self):
+        text = json.dumps({"severity": "critical", "verdict": "INVESTIGATE", "summary": "Disk full"})
+        result = TriageResult.parse_safe(text)
+        assert result.severity == "critical"
+        assert result.verdict == "INVESTIGATE"
+        assert result.summary == "Disk full"
+
+    def test_json_in_code_block(self):
+        text = '```json\n{"severity": "low", "verdict": "FALSE_POSITIVE", "summary": "Health check"}\n```'
+        result = TriageResult.parse_safe(text)
+        assert result.severity == "low"
+        assert result.verdict == "FALSE_POSITIVE"
+
+    def test_falls_back_to_regex_on_plain_text(self):
+        text = "SEVERITY: high\nVERDICT: INVESTIGATE\nSUMMARY: Nginx 502 errors"
+        result = TriageResult.parse_safe(text)
+        assert result.severity == "high"
+        assert result.verdict == "INVESTIGATE"
+        assert "Nginx 502" in result.summary
+
+    def test_invalid_json_values_fall_back_to_regex(self):
+        """JSON with wrong field names should fall back to regex."""
+        text = '{"sev": "critical", "verd": "INVESTIGATE"}\nSEVERITY: high\nVERDICT: INVESTIGATE\nSUMMARY: fallback'
+        result = TriageResult.parse_safe(text)
+        # Pydantic validation should fail on missing required fields, falling back to regex
+        assert result.severity == "high" or result.severity == "critical"
+
+
+class TestDiagnosisResultParseSafe:
+    def test_valid_json(self):
+        text = json.dumps({
+            "root_cause": "Connection pool exhausted",
+            "evidence": ["Max connections reached", "Timeout logs"],
+            "recommended_fix": "Increase pool size"
+        })
+        result = DiagnosisResult.parse_safe(text)
+        assert result.root_cause == "Connection pool exhausted"
+        assert len(result.evidence) == 2
+        assert "pool size" in result.recommended_fix.lower()
+
+    def test_falls_back_to_regex(self):
+        text = "## ROOT CAUSE:\nMemory leak in worker process\n## RECOMMENDED FIX:\nRestart workers"
+        result = DiagnosisResult.parse_safe(text)
+        assert "memory leak" in result.root_cause.lower()
+        assert "Restart" in result.recommended_fix
+
+    def test_partial_json_falls_back(self):
+        """JSON missing required field 'root_cause' should trigger regex fallback."""
+        text = '{"evidence": ["log1"]}\nROOT CAUSE: Actual root cause here'
+        result = DiagnosisResult.parse_safe(text)
+        # Should still extract something meaningful
+        assert len(result.root_cause) > 0
+
+
+class TestRemediationResultParseSafe:
+    def test_valid_json(self):
+        text = json.dumps({
+            "fix_description": "Restarted nginx service",
+            "tools_used": ["restart_service"],
+            "success": True,
+        })
+        result = RemediationResult.parse_safe(text)
+        assert result.fix_description == "Restarted nginx service"
+        assert result.success is True
+        assert "restart_service" in result.tools_used
+
+    def test_json_without_tools_gets_injected(self):
+        text = json.dumps({"fix_description": "Applied config patch", "success": True})
+        result = RemediationResult.parse_safe(text, tool_names=["apply_patch"])
+        assert "apply_patch" in result.tools_used
+
+    def test_falls_back_to_regex(self):
+        text = "FIX APPLIED: Updated database credentials in config/db.py"
+        result = RemediationResult.parse_safe(text, tool_names=["apply_patch"])
+        assert "database credentials" in result.fix_description.lower()
+        assert "apply_patch" in result.tools_used
+
+
+class TestVerificationResultParseSafe:
+    def test_valid_json_resolved(self):
+        text = json.dumps({"resolved": True, "reason": "All health checks passing"})
+        result = VerificationResult.parse_safe(text)
+        assert result.resolved is True
+        assert "health checks" in result.reason.lower()
+
+    def test_valid_json_not_resolved(self):
+        text = json.dumps({"resolved": False, "reason": "Service still returning 502"})
+        result = VerificationResult.parse_safe(text)
+        assert result.resolved is False
+
+    def test_falls_back_to_regex(self):
+        text = "The issue is resolved. All services are healthy."
+        result = VerificationResult.parse_safe(text)
+        assert result.resolved is True
+
+    def test_falls_back_negation_handling(self):
+        text = "Still failing. Not resolved."
+        result = VerificationResult.parse_safe(text)
+        assert result.resolved is False

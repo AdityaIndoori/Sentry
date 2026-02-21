@@ -1,0 +1,21 @@
+[run]
+source = backend
+omit =
+    backend/tests/*
+    backend/__init__.py
+    */__init__.py
+    backend/orchestrator/graph.py
+
+[report]
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    if __name__ == .__main__
+    raise NotImplementedError
+    pass
+    except ImportError
+show_missing = True
+precision = 2
+
+[html]
+directory = htmlcov

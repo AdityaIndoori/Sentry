@@ -327,6 +327,85 @@ class TestImmutableAuditLog:
         count_after = len(audit_log.read_all())
         assert count_after == count_before + 1
 
+    def test_verify_integrity_detects_tampered_prev_hash(self, audit_log):
+        """Tampering with prev_hash MUST be detected."""
+        audit_log.log_action(agent_id="a1", action="act1", detail="d1", result="r1")
+        audit_log.log_action(agent_id="a2", action="act2", detail="d2", result="r2")
+
+        # Tamper with second entry's prev_hash
+        entries = audit_log.read_all()
+        entries[1]["prev_hash"] = "tampered_hash_value"
+        # Rewrite the file with tampered data
+        with open(audit_log._log_path, "w", encoding="utf-8") as f:
+            for e in entries:
+                f.write(json.dumps(e, separators=(",", ":")) + "\n")
+
+        assert not audit_log.verify_integrity()
+
+    def test_verify_integrity_detects_tampered_content(self, audit_log):
+        """Tampering with entry content (hash mismatch) MUST be detected."""
+        audit_log.log_action(agent_id="a1", action="act1", detail="d1", result="r1")
+
+        # Tamper with the detail field without updating hash
+        entries = audit_log.read_all()
+        entries[0]["detail"] = "tampered_detail"
+        with open(audit_log._log_path, "w", encoding="utf-8") as f:
+            for e in entries:
+                f.write(json.dumps(e, separators=(",", ":")) + "\n")
+
+        assert not audit_log.verify_integrity()
+
+    def test_get_entry_count(self, audit_log):
+        assert audit_log.get_entry_count() == 0
+        audit_log.log_action(agent_id="a1", action="act1", detail="d1", result="r1")
+        assert audit_log.get_entry_count() == 1
+        audit_log.log_action(agent_id="a2", action="act2", detail="d2", result="r2")
+        assert audit_log.get_entry_count() == 2
+
+    def test_recover_last_hash_on_init(self):
+        """A new ImmutableAuditLog instance MUST recover the hash chain."""
+        from backend.shared.audit_log import ImmutableAuditLog
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = os.path.join(tmpdir, "audit.jsonl")
+            log1 = ImmutableAuditLog(log_path)
+            log1.log_action(agent_id="a1", action="act1", detail="d1", result="r1")
+            hash_after_first = log1._last_hash
+
+            # Create new instance from same file
+            log2 = ImmutableAuditLog(log_path)
+            assert log2._last_hash == hash_after_first
+
+            # New entry should chain correctly
+            log2.log_action(agent_id="a2", action="act2", detail="d2", result="r2")
+            assert log2.verify_integrity()
+
+    def test_read_all_skips_corrupt_json(self, audit_log):
+        """Corrupt JSON lines MUST be skipped gracefully."""
+        audit_log.log_action(agent_id="a1", action="act1", detail="d1", result="r1")
+        # Append a corrupt line
+        with open(audit_log._log_path, "a", encoding="utf-8") as f:
+            f.write("THIS IS NOT VALID JSON\n")
+        entries = audit_log.read_all()
+        # Should still return the valid entry, skipping the corrupt one
+        assert len(entries) == 1
+
+    def test_read_all_empty_file(self):
+        """Read from nonexistent file returns empty list."""
+        from backend.shared.audit_log import ImmutableAuditLog
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = os.path.join(tmpdir, "nonexistent_subdir", "audit.jsonl")
+            log = ImmutableAuditLog(log_path)
+            assert log.read_all() == []
+
+    def test_verify_integrity_empty_log(self, audit_log):
+        """Empty log should verify successfully."""
+        assert audit_log.verify_integrity()
+
+    def test_log_action_returns_hash(self, audit_log):
+        h = audit_log.log_action(agent_id="a1", action="act1", detail="d1", result="r1")
+        assert isinstance(h, str)
+        assert len(h) == 64  # SHA-256 hex digest
+
 
 # ═══════════════════════════════════════════════════════════════
 # AGENT THROTTLE TESTS
@@ -359,6 +438,33 @@ class TestAgentThrottle:
         throttle.is_allowed("agent-1", "tool_call")
         throttle.is_allowed("agent-1", "tool_call")
         assert throttle.get_remaining("agent-1") == 3
+
+    def test_reset_single_agent(self, throttle):
+        """Reset MUST clear only the specified agent's counter."""
+        for _ in range(5):
+            throttle.is_allowed("agent-1", "tool_call")
+        assert not throttle.is_allowed("agent-1", "tool_call")
+        throttle.reset("agent-1")
+        assert throttle.is_allowed("agent-1", "tool_call")
+        assert throttle.get_remaining("agent-1") == 4
+
+    def test_reset_all(self, throttle):
+        """Reset all MUST clear every agent's counter."""
+        for _ in range(5):
+            throttle.is_allowed("agent-1", "tool_call")
+        for _ in range(3):
+            throttle.is_allowed("agent-2", "tool_call")
+        assert not throttle.is_allowed("agent-1", "tool_call")
+        assert throttle.get_remaining("agent-2") == 2
+
+        throttle.reset_all()
+        assert throttle.get_remaining("agent-1") == 5
+        assert throttle.get_remaining("agent-2") == 5
+        assert throttle.is_allowed("agent-1", "tool_call")
+
+    def test_get_remaining_unknown_agent(self, throttle):
+        """Unknown agent should have full remaining quota."""
+        assert throttle.get_remaining("never-seen") == 5
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -393,3 +499,63 @@ class TestToolRegistry:
         assert "apply_patch" in tools
         assert "restart_service" in tools
         assert "read_file" not in tools
+
+    def test_get_tool_existing(self, registry):
+        from backend.shared.tool_registry import ToolDefinition
+        registry.register("read_file", allowed_roles=[AgentRole.DETECTIVE], description="Read a file")
+        tool = registry.get_tool("read_file")
+        assert tool is not None
+        assert tool.name == "read_file"
+        assert tool.description == "Read a file"
+
+    def test_get_tool_nonexistent(self, registry):
+        assert registry.get_tool("nonexistent") is None
+
+    def test_get_all_tools(self, registry):
+        registry.register("read_file", allowed_roles=[AgentRole.DETECTIVE])
+        registry.register("apply_patch", allowed_roles=[AgentRole.SURGEON], is_active=True)
+        all_tools = registry.get_all_tools()
+        assert len(all_tools) == 2
+        names = {t.name for t in all_tools}
+        assert names == {"read_file", "apply_patch"}
+
+    def test_tool_definition_defaults(self):
+        from backend.shared.tool_registry import ToolDefinition
+        td = ToolDefinition(name="test")
+        assert td.description == ""
+        assert td.allowed_roles == []
+        assert td.is_active is False
+
+
+class TestCreateDefaultRegistry:
+    """Test the factory function for default registry."""
+
+    def test_creates_six_tools(self):
+        from backend.shared.tool_registry import create_default_registry
+        registry = create_default_registry()
+        all_tools = registry.get_all_tools()
+        assert len(all_tools) == 6
+
+    def test_detective_has_four_tools(self):
+        from backend.shared.tool_registry import create_default_registry
+        registry = create_default_registry()
+        tools = registry.get_tools_for_role(AgentRole.DETECTIVE)
+        assert len(tools) == 4
+        assert "read_file" in tools
+        assert "grep_search" in tools
+        assert "fetch_docs" in tools
+        assert "run_diagnostics" in tools
+
+    def test_surgeon_has_two_active_tools(self):
+        from backend.shared.tool_registry import create_default_registry
+        registry = create_default_registry()
+        tools = registry.get_tools_for_role(AgentRole.SURGEON)
+        assert len(tools) == 2
+        assert "apply_patch" in tools
+        assert "restart_service" in tools
+
+    def test_supervisor_has_all_tools(self):
+        from backend.shared.tool_registry import create_default_registry
+        registry = create_default_registry()
+        tools = registry.get_tools_for_role(AgentRole.SUPERVISOR)
+        assert len(tools) == 6

@@ -1,8 +1,10 @@
 """
 Tests for LLM client implementations and factory function.
-Covers OpusLLMClient, BedrockGatewayLLMClient, and create_llm_client factory.
+Covers OpusLLMClient, BedrockGatewayLLMClient, create_llm_client factory,
+and production hardening: retry/timeout, transient error detection, backoff.
 """
 
+import asyncio
 import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -18,8 +20,13 @@ from backend.orchestrator.llm_client import (
     BedrockGatewayLLMClient,
     OpusLLMClient,
     _effort_to_budget,
+    _is_transient_error,
     _no_api_key_response,
+    _retry_with_backoff,
     create_llm_client,
+    LLM_CALL_TIMEOUT_SECONDS,
+    LLM_MAX_RETRIES,
+    LLM_BACKOFF_BASE_SECONDS,
 )
 
 
@@ -258,3 +265,240 @@ class TestCreateLLMClient:
         )
         client = create_llm_client(config)
         assert isinstance(client, OpusLLMClient)
+
+
+# ===========================================================================
+# Hardening tests: _is_transient_error()
+# ===========================================================================
+
+class TestIsTransientError:
+    """Tests for transient vs permanent error classification."""
+
+    def test_timeout_is_transient(self):
+        assert _is_transient_error(Exception("Request timed out")) is True
+
+    def test_rate_limit_is_transient(self):
+        assert _is_transient_error(Exception("rate_limit_error: too many requests")) is True
+
+    def test_overloaded_is_transient(self):
+        assert _is_transient_error(Exception("Server overloaded, try again")) is True
+
+    def test_503_is_transient(self):
+        assert _is_transient_error(Exception("HTTP 503 Service Unavailable")) is True
+
+    def test_502_is_transient(self):
+        assert _is_transient_error(Exception("502 Bad Gateway")) is True
+
+    def test_connection_error_is_transient(self):
+        assert _is_transient_error(Exception("Connection reset by peer")) is True
+
+    def test_capacity_is_transient(self):
+        assert _is_transient_error(Exception("Insufficient capacity")) is True
+
+    def test_invalid_api_key_is_permanent(self):
+        assert _is_transient_error(Exception("Invalid API key provided")) is False
+
+    def test_permission_denied_is_permanent(self):
+        assert _is_transient_error(Exception("Permission denied for this resource")) is False
+
+    def test_model_not_found_is_permanent(self):
+        assert _is_transient_error(Exception("Model not found: claude-invalid")) is False
+
+    def test_empty_error_is_permanent(self):
+        assert _is_transient_error(Exception("")) is False
+
+
+# ===========================================================================
+# Hardening tests: _retry_with_backoff()
+# ===========================================================================
+
+class TestRetryWithBackoff:
+    """Tests for the retry/timeout wrapper around LLM calls."""
+
+    @pytest.mark.asyncio
+    async def test_success_on_first_attempt(self):
+        """Coroutine succeeds immediately — no retries needed."""
+        expected = {"text": "hello", "error": None}
+
+        async def _coro():
+            return expected
+
+        result = await _retry_with_backoff(lambda: _coro(), "test op")
+        assert result == expected
+
+    @pytest.mark.asyncio
+    async def test_retries_on_transient_error(self):
+        """Transient error on first call, success on second."""
+        call_count = 0
+
+        async def _coro():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise Exception("Connection reset by peer")
+            return {"text": "recovered", "error": None}
+
+        with patch("backend.orchestrator.llm_client.asyncio.sleep", new_callable=AsyncMock):
+            result = await _retry_with_backoff(lambda: _coro(), "test op")
+
+        assert result["text"] == "recovered"
+        assert result["error"] is None
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_permanent_error_no_retry(self):
+        """Permanent error should fail immediately without retrying."""
+        call_count = 0
+
+        async def _coro():
+            nonlocal call_count
+            call_count += 1
+            raise Exception("Invalid API key provided")
+
+        result = await _retry_with_backoff(lambda: _coro(), "test op")
+        assert call_count == 1  # Only one attempt
+        assert result["error"] == "Invalid API key provided"
+        assert result["text"] == ""
+
+    @pytest.mark.asyncio
+    async def test_all_retries_exhausted(self):
+        """All retries fail with transient errors → returns error dict."""
+        call_count = 0
+
+        async def _coro():
+            nonlocal call_count
+            call_count += 1
+            raise Exception("Connection timeout")
+
+        with patch("backend.orchestrator.llm_client.asyncio.sleep", new_callable=AsyncMock):
+            result = await _retry_with_backoff(lambda: _coro(), "test op")
+
+        assert call_count == LLM_MAX_RETRIES
+        assert "failed" in result["error"].lower()
+        assert result["input_tokens"] == 0
+
+    @pytest.mark.asyncio
+    async def test_timeout_triggers_retry(self):
+        """asyncio.TimeoutError should trigger retry, not immediate failure."""
+        call_count = 0
+
+        async def _coro():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise asyncio.TimeoutError()
+            return {"text": "ok after timeout", "error": None}
+
+        with patch("backend.orchestrator.llm_client.asyncio.sleep", new_callable=AsyncMock):
+            # Also patch wait_for to just call the coro directly (we raise TimeoutError manually)
+            result = await _retry_with_backoff(lambda: _coro(), "test op")
+
+        assert call_count == 2
+        assert result["text"] == "ok after timeout"
+
+    @pytest.mark.asyncio
+    async def test_backoff_timing(self):
+        """Verify exponential backoff sleep is called with correct values."""
+        sleep_calls = []
+
+        async def _mock_sleep(seconds):
+            sleep_calls.append(seconds)
+
+        async def _coro():
+            raise Exception("overloaded server 529")
+
+        with patch("backend.orchestrator.llm_client.asyncio.sleep", side_effect=_mock_sleep):
+            await _retry_with_backoff(lambda: _coro(), "test op")
+
+        # With 3 retries: sleep after attempt 1 and 2, not after attempt 3
+        assert len(sleep_calls) == LLM_MAX_RETRIES - 1
+        # First backoff: base * 2^0 = 2.0, second: base * 2^1 = 4.0
+        assert sleep_calls[0] == LLM_BACKOFF_BASE_SECONDS * 1
+        assert sleep_calls[1] == LLM_BACKOFF_BASE_SECONDS * 2
+
+
+# ===========================================================================
+# Hardening tests: OpusLLMClient._raw_call() TypeError handling
+# ===========================================================================
+
+class TestOpusRawCallTypeError:
+    """Tests for the SDK compatibility fallback when 'thinking' param fails."""
+
+    @pytest.mark.asyncio
+    @patch("backend.orchestrator.llm_client.anthropic.AsyncAnthropic")
+    async def test_raw_call_retries_without_thinking_on_type_error(self, mock_cls):
+        """If create() raises TypeError for 'thinking', retry without it."""
+        mock_usage = MagicMock()
+        mock_usage.input_tokens = 5
+        mock_usage.output_tokens = 10
+
+        mock_block = MagicMock()
+        mock_block.type = "text"
+        mock_block.text = "Fallback response"
+
+        mock_response = MagicMock()
+        mock_response.content = [mock_block]
+        mock_response.usage = mock_usage
+
+        # First call with 'thinking' raises TypeError, second without succeeds
+        mock_create = AsyncMock(side_effect=[
+            TypeError("unexpected keyword argument 'thinking'"),
+            mock_response,
+        ])
+        mock_instance = MagicMock()
+        mock_instance.messages.create = mock_create
+        mock_cls.return_value = mock_instance
+
+        client = OpusLLMClient(AnthropicConfig(api_key="sk-ant-real-key"))
+        kwargs = {
+            "model": "claude-opus-4-0-20250514",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "test"}],
+            "thinking": {"type": "enabled", "budget_tokens": 2048},
+        }
+        result = await client._raw_call(kwargs)
+        assert result["text"] == "Fallback response"
+        assert result["input_tokens"] == 5
+        # Verify create was called twice: once with thinking, once without
+        assert mock_create.call_count == 2
+        # Second call should NOT have 'thinking' key
+        second_call_kwargs = mock_create.call_args_list[1][1]
+        assert "thinking" not in second_call_kwargs
+
+
+# ===========================================================================
+# Hardening tests: OpusLLMClient.analyze() full path with retry
+# ===========================================================================
+
+class TestOpusAnalyzeWithRetry:
+    """Integration test: analyze() → _retry_with_backoff() → _raw_call()."""
+
+    @pytest.mark.asyncio
+    @patch("backend.orchestrator.llm_client.anthropic.AsyncAnthropic")
+    async def test_analyze_with_disabled_effort_skips_thinking(self, mock_cls):
+        """effort='disabled' should not add thinking parameter."""
+        mock_usage = MagicMock()
+        mock_usage.input_tokens = 10
+        mock_usage.output_tokens = 20
+
+        mock_block = MagicMock()
+        mock_block.type = "text"
+        mock_block.text = "Analysis complete"
+
+        mock_response = MagicMock()
+        mock_response.content = [mock_block]
+        mock_response.usage = mock_usage
+
+        mock_create = AsyncMock(return_value=mock_response)
+        mock_instance = MagicMock()
+        mock_instance.messages.create = mock_create
+        mock_cls.return_value = mock_instance
+
+        client = OpusLLMClient(AnthropicConfig(api_key="sk-ant-real-key"))
+        result = await client.analyze("test prompt", effort="disabled")
+
+        assert result["text"] == "Analysis complete"
+        assert result["error"] is None
+        # Verify 'thinking' was NOT in the call kwargs
+        call_kwargs = mock_create.call_args[1]
+        assert "thinking" not in call_kwargs
