@@ -11,6 +11,9 @@ from typing import Optional
 import aiohttp
 
 from backend.shared.security import SecurityGuard
+from backend.mcp_tools.tool_schemas import (
+    ReadFileArgs, GrepSearchArgs, FetchDocsArgs, pydantic_to_input_schema,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,16 +54,7 @@ class ReadFileTool:
         return {
             "name": "read_file",
             "description": "Read contents of a file within the project root.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Relative path from project root",
-                    }
-                },
-                "required": ["path"],
-            },
+            "input_schema": pydantic_to_input_schema(ReadFileArgs),
         }
 
 
@@ -115,18 +109,7 @@ class GrepSearchTool:
         return {
             "name": "grep_search",
             "description": "Search for a regex pattern across project files.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Regex pattern"},
-                    "path": {
-                        "type": "string",
-                        "description": "Relative directory to search",
-                        "default": ".",
-                    },
-                },
-                "required": ["query"],
-            },
+            "input_schema": pydantic_to_input_schema(GrepSearchArgs),
         }
 
 
@@ -157,11 +140,5 @@ class FetchDocsTool:
         return {
             "name": "fetch_docs",
             "description": "Fetch documentation from approved domains.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "URL to fetch"},
-                },
-                "required": ["url"],
-            },
+            "input_schema": pydantic_to_input_schema(FetchDocsArgs),
         }

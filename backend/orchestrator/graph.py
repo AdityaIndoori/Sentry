@@ -237,6 +237,16 @@ class IncidentGraphBuilder:
             response = await self._llm.analyze(prompt, effort="low")
             self._track_cost(response)
 
+            # --- #4: Empty LLM response guard ---
+            if response.get("error") and not response.get("text", "").strip():
+                error_msg = response["error"]
+                logger.error(f"Triage LLM call failed for {incident.id}: {error_msg}")
+                incident.log_activity(ActivityType.ERROR, "triage",
+                                      f"LLM returned error: {error_msg}")
+                incident.state = IncidentState.ESCALATED
+                incident.current_agent_action = None
+                return {**state, "incident": incident, "error": error_msg}
+
             text = response.get("text", "")
             logger.info(f"Triage raw for {incident.id}: {text[:200]}")
             incident.log_activity(ActivityType.INFO, "triage", "LLM response received",
@@ -244,8 +254,8 @@ class IncidentGraphBuilder:
                                   metadata={"input_tokens": response.get("input_tokens", 0),
                                             "output_tokens": response.get("output_tokens", 0)})
 
-            # Parse into structured result
-            triage = TriageResult.parse_from_text(text)
+            # Parse into structured result (Tier 2: JSON → Tier 3: regex)
+            triage = TriageResult.parse_safe(text)
             logger.info(
                 f"Triage parsed for {incident.id}: "
                 f"severity={triage.severity}, verdict={triage.verdict}, "
@@ -359,7 +369,7 @@ class IncidentGraphBuilder:
                 # No tool calls - LLM gave text response
                 text = response.get("text", "")
                 if text:
-                    diagnosis = DiagnosisResult.parse_from_text(text)
+                    diagnosis = DiagnosisResult.parse_safe(text)
                     incident.root_cause = diagnosis.root_cause
                     incident.state = IncidentState.REMEDIATION
                     incident.log_activity(ActivityType.DECISION, "diagnosis",
@@ -387,7 +397,7 @@ class IncidentGraphBuilder:
             self._track_cost(response)
 
             text = response.get("text", "")
-            diagnosis = DiagnosisResult.parse_from_text(text) if text else DiagnosisResult(
+            diagnosis = DiagnosisResult.parse_safe(text) if text else DiagnosisResult(
                 root_cause="Unable to determine root cause",
                 recommended_fix="Manual investigation required",
             )
@@ -434,7 +444,7 @@ class IncidentGraphBuilder:
                 response = await self._llm.analyze(prompt, effort="medium")
                 self._track_cost(response)
                 text = response.get("text", "")
-                remediation = RemediationResult.parse_from_text(text)
+                remediation = RemediationResult.parse_safe(text)
                 incident.fix_applied = f"[AUDIT] {remediation.fix_description}"
                 incident.log_activity(ActivityType.DECISION, "remediation",
                                       "Fix proposed (AUDIT — not executed)",
@@ -463,7 +473,7 @@ class IncidentGraphBuilder:
                     if result.success:
                         incident.fix_applied = f"{tc['name']}: {result.output[:200]}"
                 text = response.get("text", "")
-                remediation = RemediationResult.parse_from_text(text, tools_used)
+                remediation = RemediationResult.parse_safe(text, tools_used)
                 if not incident.fix_applied:
                     incident.fix_applied = remediation.fix_description
                 incident.log_activity(ActivityType.DECISION, "remediation",
@@ -506,7 +516,7 @@ class IncidentGraphBuilder:
             self._track_cost(response)
 
             text = response.get("text", "")
-            verification = VerificationResult.parse_from_text(text)
+            verification = VerificationResult.parse_safe(text)
 
             if verification.resolved:
                 incident.state = IncidentState.RESOLVED

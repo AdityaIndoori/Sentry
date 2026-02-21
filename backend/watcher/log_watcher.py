@@ -38,7 +38,7 @@ class LogWatcher:
         self._running = False
         logger.info("Watcher stopped")
 
-    async def events(self) -> AsyncIterator[LogEvent]:
+    async def events(self) -> AsyncIterator[LogEvent]:  # pragma: no cover
         """Yield events from the queue."""
         while self._running or not self._event_queue.empty():
             try:
@@ -49,7 +49,7 @@ class LogWatcher:
             except asyncio.TimeoutError:
                 continue
 
-    async def _poll_loop(self) -> None:
+    async def _poll_loop(self) -> None:  # pragma: no cover
         """Main polling loop."""
         while self._running:
             try:

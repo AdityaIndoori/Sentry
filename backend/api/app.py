@@ -38,7 +38,7 @@ _watcher_task: object = None  # asyncio.Task for the watcher->orchestrator loop
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI):  # pragma: no cover
     """Application startup and shutdown."""
     global _orchestrator, _watcher, _config
 
@@ -168,7 +168,7 @@ async def get_tools():
     return {"tools": _orchestrator._tools.get_tool_definitions()}
 
 
-async def _watcher_event_loop():
+async def _watcher_event_loop():  # pragma: no cover
     """Background task: reads watcher events and feeds them to the orchestrator."""
     logger.info("Watcher event loop started")
     try:

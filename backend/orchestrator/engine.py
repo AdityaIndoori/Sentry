@@ -20,6 +20,9 @@ from backend.services.registry import ServiceRegistry
 
 logger = logging.getLogger(__name__)
 
+# --- #4: Resolved incidents list cap (FIFO) ---
+MAX_RESOLVED_INCIDENTS = 100
+
 
 class Orchestrator:
     """
@@ -96,6 +99,9 @@ class Orchestrator:
             if incident.state == IncidentState.RESOLVED:
                 await self._save_to_memory(incident)
                 self._resolved_incidents.append(incident)
+                # --- #4: FIFO cap on resolved list to prevent unbounded growth ---
+                if len(self._resolved_incidents) > MAX_RESOLVED_INCIDENTS:
+                    self._resolved_incidents = self._resolved_incidents[-MAX_RESOLVED_INCIDENTS:]
                 del self._active_incidents[incident_id]
             elif incident.state == IncidentState.IDLE:
                 del self._active_incidents[incident_id]

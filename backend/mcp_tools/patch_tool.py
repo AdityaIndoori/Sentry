@@ -10,6 +10,7 @@ import shutil
 import tempfile
 
 from backend.shared.security import SecurityGuard
+from backend.mcp_tools.tool_schemas import ApplyPatchArgs, pydantic_to_input_schema
 
 logger = logging.getLogger(__name__)
 
@@ -96,18 +97,5 @@ class ApplyPatchTool:
         return {
             "name": "apply_patch",
             "description": "Apply a diff patch to a file. Creates .bak backup.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "file_path": {
-                        "type": "string",
-                        "description": "Relative path to file",
-                    },
-                    "diff": {
-                        "type": "string",
-                        "description": "Unified diff to apply",
-                    },
-                },
-                "required": ["file_path", "diff"],
-            },
+            "input_schema": pydantic_to_input_schema(ApplyPatchArgs),
         }

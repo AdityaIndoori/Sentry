@@ -1,10 +1,18 @@
 """
 Tool executor - routes tool calls to appropriate handlers.
 Implements IToolExecutor interface (Dependency Inversion).
+
+Production hardening:
+- #3: Pydantic arg validation before execution (single source of truth)
+- #4: Empty-output rejection — success=True requires non-empty output
+- #5: Transient failure retry with backoff for tool execution
 """
 
+import asyncio
 import logging
 from typing import Optional
+
+from pydantic import ValidationError
 
 from backend.shared.circuit_breaker import RateLimiter
 from backend.shared.config import SecurityConfig, SentryMode
@@ -16,8 +24,27 @@ from .active_tools import RunDiagnosticsTool
 from .patch_tool import ApplyPatchTool
 from .read_only_tools import FetchDocsTool, GrepSearchTool, ReadFileTool
 from .restart_tool import RestartServiceTool
+from .tool_schemas import TOOL_ARG_MODELS
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Tool retry constants (#5)
+# ---------------------------------------------------------------------------
+TOOL_MAX_RETRIES = 2           # 1 initial + 1 retry
+TOOL_BACKOFF_SECONDS = 1.0     # Short backoff for tool retries
+TOOL_TIMEOUT_SECONDS = 60      # Max time for a single tool execution
+
+_TOOL_TRANSIENT_KEYWORDS = (
+    "timeout", "timed out", "connection", "reset",
+    "broken pipe", "eof", "temporarily", "503", "502",
+)
+
+
+def _is_tool_transient(error_str: str) -> bool:
+    """Check if a tool error is transient and worth retrying."""
+    lower = error_str.lower()
+    return any(kw in lower for kw in _TOOL_TRANSIENT_KEYWORDS)
 
 
 class MCPToolExecutor(IToolExecutor):
@@ -88,33 +115,101 @@ class MCPToolExecutor(IToolExecutor):
                 audit_only=True,
             )
 
+        # --- #3: Pydantic arg validation (single source of truth) ---
+        arg_model = TOOL_ARG_MODELS.get(tool_call.tool_name)
+        if arg_model:
+            try:
+                validated = arg_model.model_validate(tool_call.arguments)
+                # Use validated (coerced) args going forward
+                validated_args = validated.model_dump()
+            except ValidationError as e:
+                logger.warning(
+                    f"Arg validation failed for {tool_call.tool_name}: {e}"
+                )
+                return ToolResult(
+                    tool_name=tool_call.tool_name,
+                    success=False,
+                    error=f"Invalid arguments: {e}",
+                )
+        else:
+            validated_args = tool_call.arguments
+
         logger.info(
             f"Executing tool: {tool_call.tool_name} "
             f"(category={category.value})"
         )
 
-        try:
-            result = await tool.execute(**tool_call.arguments)
-            return ToolResult(
-                tool_name=tool_call.tool_name,
-                success=result.get("success", False),
-                output=result.get("output", ""),
-                error=result.get("error"),
-                audit_only=result.get("audit_only", False),
-            )
-        except TypeError as e:
-            return ToolResult(
-                tool_name=tool_call.tool_name,
-                success=False,
-                error=f"Invalid arguments: {e}",
-            )
-        except Exception as e:
-            logger.error(f"Tool execution error: {e}")
-            return ToolResult(
-                tool_name=tool_call.tool_name,
-                success=False,
-                error=f"Execution error: {e}",
-            )
+        # --- #5: Tool retry on transient failures ---
+        last_error = None
+        for attempt in range(1, TOOL_MAX_RETRIES + 1):
+            try:
+                raw = await asyncio.wait_for(
+                    tool.execute(**validated_args),
+                    timeout=TOOL_TIMEOUT_SECONDS,
+                )
+                success = raw.get("success", False)
+                output = raw.get("output", "")
+                error = raw.get("error")
+                audit_only = raw.get("audit_only", False)
+
+                # --- #4: Empty-output rejection ---
+                # A "success" with no output is suspicious; demote to failure
+                # (except audit-only results which legitimately have short output)
+                if success and not output and not audit_only:
+                    logger.warning(
+                        f"Tool {tool_call.tool_name} returned success but "
+                        f"empty output — demoting to failure"
+                    )
+                    success = False
+                    error = error or "Tool returned success but produced no output"
+
+                return ToolResult(
+                    tool_name=tool_call.tool_name,
+                    success=success,
+                    output=output,
+                    error=error,
+                    audit_only=audit_only,
+                )
+            except asyncio.TimeoutError:
+                last_error = f"Tool {tool_call.tool_name} timed out after {TOOL_TIMEOUT_SECONDS}s"
+                logger.warning(f"{last_error} (attempt {attempt}/{TOOL_MAX_RETRIES})")
+            except TypeError as e:
+                # Permanent: bad arguments won't fix on retry
+                return ToolResult(
+                    tool_name=tool_call.tool_name,
+                    success=False,
+                    error=f"Invalid arguments: {e}",
+                )
+            except Exception as e:
+                err_str = str(e)
+                last_error = err_str
+                if not _is_tool_transient(err_str):
+                    # Permanent error — don't retry
+                    logger.error(f"Tool {tool_call.tool_name} permanent error: {e}")
+                    return ToolResult(
+                        tool_name=tool_call.tool_name,
+                        success=False,
+                        error=f"Execution error: {e}",
+                    )
+                logger.warning(
+                    f"Tool {tool_call.tool_name} transient error "
+                    f"(attempt {attempt}/{TOOL_MAX_RETRIES}): {e}"
+                )
+
+            # Backoff before retry
+            if attempt < TOOL_MAX_RETRIES:
+                await asyncio.sleep(TOOL_BACKOFF_SECONDS * attempt)
+
+        # All retries exhausted
+        logger.error(
+            f"Tool {tool_call.tool_name} failed after {TOOL_MAX_RETRIES} "
+            f"attempts: {last_error}"
+        )
+        return ToolResult(
+            tool_name=tool_call.tool_name,
+            success=False,
+            error=f"All {TOOL_MAX_RETRIES} attempts failed: {last_error}",
+        )
 
     def get_tool_definitions(self) -> list:
         return [

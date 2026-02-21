@@ -2,8 +2,14 @@
 LLM client implementations for Sentry.
 Supports both direct Anthropic API and AWS Bedrock Access Gateway (OpenAI-compatible).
 Implements ILLMClient with adaptive thinking support.
+
+Production hardening:
+- All LLM calls wrapped in asyncio.wait_for() with configurable timeout
+- Exponential backoff retry (3 attempts) on transient failures
+- Clear error categorization: transient vs permanent failures
 """
 
+import asyncio
 import json
 import logging
 from typing import Optional, Union
@@ -20,6 +26,83 @@ from backend.shared.interfaces import ILLMClient
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Retry / timeout constants
+# ---------------------------------------------------------------------------
+
+LLM_CALL_TIMEOUT_SECONDS = 120      # Max time for a single LLM API call
+LLM_MAX_RETRIES = 3                  # Total attempts (1 initial + 2 retries)
+LLM_BACKOFF_BASE_SECONDS = 2.0      # Exponential backoff base: 2s, 4s, 8s
+
+# Errors that are worth retrying (transient)
+_TRANSIENT_ERROR_KEYWORDS = (
+    "timeout", "timed out", "rate_limit", "rate limit",
+    "overloaded", "capacity", "529", "503", "502",
+    "connection", "reset", "eof", "broken pipe",
+)
+
+
+def _is_transient_error(error: Exception) -> bool:
+    """Determine if an error is transient and worth retrying."""
+    error_str = str(error).lower()
+    return any(keyword in error_str for keyword in _TRANSIENT_ERROR_KEYWORDS)
+
+
+async def _retry_with_backoff(coro_factory, operation_name: str) -> dict:
+    """
+    Execute an async operation with timeout + exponential backoff retry.
+
+    Args:
+        coro_factory: A callable that returns a new coroutine on each call.
+                      (Must be a factory because coroutines can't be re-awaited.)
+        operation_name: For logging (e.g., "Anthropic API call").
+
+    Returns:
+        The result dict from the coroutine, or an error dict on final failure.
+    """
+    last_error = None
+    for attempt in range(1, LLM_MAX_RETRIES + 1):
+        try:
+            result = await asyncio.wait_for(
+                coro_factory(),
+                timeout=LLM_CALL_TIMEOUT_SECONDS,
+            )
+            return result
+        except asyncio.TimeoutError:
+            last_error = TimeoutError(
+                f"{operation_name} timed out after {LLM_CALL_TIMEOUT_SECONDS}s"
+            )
+            logger.warning(
+                f"{operation_name} timeout (attempt {attempt}/{LLM_MAX_RETRIES})"
+            )
+        except Exception as e:
+            last_error = e
+            if not _is_transient_error(e):
+                # Permanent error — don't retry
+                logger.error(f"{operation_name} permanent error: {e}")
+                return {
+                    "text": "", "tool_calls": [], "thinking": "",
+                    "error": str(e), "input_tokens": 0, "output_tokens": 0,
+                }
+            logger.warning(
+                f"{operation_name} transient error (attempt {attempt}/{LLM_MAX_RETRIES}): {e}"
+            )
+
+        # Backoff before retry (except after final attempt)
+        if attempt < LLM_MAX_RETRIES:
+            backoff = LLM_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+            logger.info(f"{operation_name} retrying in {backoff:.1f}s...")
+            await asyncio.sleep(backoff)
+
+    # All retries exhausted
+    logger.error(
+        f"{operation_name} failed after {LLM_MAX_RETRIES} attempts: {last_error}"
+    )
+    return {
+        "text": "", "tool_calls": [], "thinking": "",
+        "error": f"All {LLM_MAX_RETRIES} attempts failed: {last_error}",
+        "input_tokens": 0, "output_tokens": 0,
+    }
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -85,27 +168,25 @@ class OpusLLMClient(ILLMClient):
         if tools:
             kwargs["tools"] = tools
 
+        return await _retry_with_backoff(
+            lambda: self._raw_call(kwargs),
+            "Anthropic API call",
+        )
+
+    async def _raw_call(self, kwargs: dict) -> dict:
+        """Single Anthropic API call attempt (used by retry wrapper)."""
         try:
             response = await self._client.messages.create(**kwargs)
-            usage = response.usage
-            self._total_input += usage.input_tokens
-            self._total_output += usage.output_tokens
-            return self._parse_response(response, usage)
         except TypeError as e:
+            # Thinking parameter not supported by this SDK version — retry without it
             logger.warning(f"SDK parameter error, retrying without thinking: {e}")
-            kwargs.pop("thinking", None)
-            try:
-                response = await self._client.messages.create(**kwargs)
-                usage = response.usage
-                self._total_input += usage.input_tokens
-                self._total_output += usage.output_tokens
-                return self._parse_response(response, usage)
-            except Exception as e2:
-                logger.error(f"Anthropic API error (retry): {e2}")
-                return {"text": "", "tool_calls": [], "error": str(e2), "input_tokens": 0, "output_tokens": 0}
-        except anthropic.APIError as e:
-            logger.error(f"Anthropic API error: {e}")
-            return {"text": "", "tool_calls": [], "error": str(e), "input_tokens": 0, "output_tokens": 0}
+            kwargs_fallback = {k: v for k, v in kwargs.items() if k != "thinking"}
+            response = await self._client.messages.create(**kwargs_fallback)
+
+        usage = response.usage
+        self._total_input += usage.input_tokens
+        self._total_output += usage.output_tokens
+        return self._parse_response(response, usage)
 
     def _parse_response(self, response, usage) -> dict:
         text_parts = []
@@ -191,12 +272,15 @@ class BedrockGatewayLLMClient(ILLMClient):
         if tools:
             kwargs["tools"] = self._convert_tools(tools)
 
-        try:
-            response = await self._client.chat.completions.create(**kwargs)
-            return self._parse_response(response)
-        except Exception as e:
-            logger.error(f"Bedrock Gateway API error: {e}")
-            return {"text": "", "tool_calls": [], "error": str(e), "input_tokens": 0, "output_tokens": 0}
+        return await _retry_with_backoff(
+            lambda: self._raw_call(kwargs),
+            "Bedrock Gateway API call",
+        )
+
+    async def _raw_call(self, kwargs: dict) -> dict:
+        """Single Bedrock Gateway API call attempt (used by retry wrapper)."""
+        response = await self._client.chat.completions.create(**kwargs)
+        return self._parse_response(response)
 
     def _convert_tools(self, anthropic_tools: list) -> list:
         """

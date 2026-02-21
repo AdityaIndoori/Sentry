@@ -1,11 +1,67 @@
 """
 Pydantic schemas for structured LLM output parsing.
 These enforce clean, typed responses from the LLM instead of raw markdown.
+
+Provider-agnostic 3-tier validation strategy:
+  Tier 1: Tool/function calling (handled at graph level — structured tool_call data)
+  Tier 2: JSON-in-text → Pydantic model_validate_json() (tried first in parse_safe)
+  Tier 3: Regex extraction via parse_from_text() (fallback)
 """
 
+import json
+import logging
 import re
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+
+def _try_extract_json(text: str) -> Optional[dict]:
+    """
+    Attempt to extract a JSON object from LLM text output.
+
+    Handles:
+      - Pure JSON responses
+      - JSON wrapped in ```json ... ``` code blocks
+      - JSON embedded in surrounding prose (first { ... } match)
+
+    Returns the parsed dict, or None if no valid JSON found.
+    """
+    if not text or not text.strip():
+        return None
+
+    stripped = text.strip()
+
+    # 1. Try direct parse (pure JSON response)
+    try:
+        obj = json.loads(stripped)
+        if isinstance(obj, dict):
+            return obj
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # 2. Try extracting from ```json ... ``` code block
+    code_block = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", stripped, re.DOTALL)
+    if code_block:
+        try:
+            obj = json.loads(code_block.group(1).strip())
+            if isinstance(obj, dict):
+                return obj
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # 3. Try finding first { ... } pair (greedy for nested objects)
+    brace_match = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", stripped, re.DOTALL)
+    if brace_match:
+        try:
+            obj = json.loads(brace_match.group(0))
+            if isinstance(obj, dict):
+                return obj
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    return None
 
 
 class TriageResult(BaseModel):
@@ -13,6 +69,23 @@ class TriageResult(BaseModel):
     severity: str = Field(description="One of: low, medium, high, critical")
     verdict: str = Field(description="One of: INVESTIGATE, FALSE_POSITIVE")
     summary: str = Field(description="One-line description of the issue")
+
+    @classmethod
+    def parse_safe(cls, text: str) -> "TriageResult":
+        """
+        3-tier parse: JSON → regex fallback.
+        Tier 1 (tool calling) is handled by the graph node before calling this.
+        """
+        # Tier 2: Try JSON extraction + Pydantic validation
+        json_obj = _try_extract_json(text)
+        if json_obj:
+            try:
+                return cls.model_validate(json_obj)
+            except ValidationError as e:
+                logger.debug(f"TriageResult JSON validation failed, falling back to regex: {e}")
+
+        # Tier 3: Regex fallback
+        return cls.parse_from_text(text)
 
     @classmethod
     def parse_from_text(cls, text: str) -> "TriageResult":
@@ -70,6 +143,20 @@ class DiagnosisResult(BaseModel):
         default="",
         description="Recommended remediation action"
     )
+
+    @classmethod
+    def parse_safe(cls, text: str) -> "DiagnosisResult":
+        """
+        3-tier parse: JSON → regex fallback.
+        """
+        json_obj = _try_extract_json(text)
+        if json_obj:
+            try:
+                return cls.model_validate(json_obj)
+            except ValidationError as e:
+                logger.debug(f"DiagnosisResult JSON validation failed, falling back to regex: {e}")
+
+        return cls.parse_from_text(text)
 
     @classmethod
     def parse_from_text(cls, text: str) -> "DiagnosisResult":
@@ -149,6 +236,22 @@ class RemediationResult(BaseModel):
     success: bool = Field(default=False, description="Whether the fix succeeded")
 
     @classmethod
+    def parse_safe(cls, text: str, tool_names: list[str] = None) -> "RemediationResult":
+        """
+        3-tier parse: JSON → regex fallback.
+        """
+        json_obj = _try_extract_json(text)
+        if json_obj:
+            try:
+                if tool_names and "tools_used" not in json_obj:
+                    json_obj["tools_used"] = tool_names
+                return cls.model_validate(json_obj)
+            except ValidationError as e:
+                logger.debug(f"RemediationResult JSON validation failed, falling back to regex: {e}")
+
+        return cls.parse_from_text(text, tool_names)
+
+    @classmethod
     def parse_from_text(cls, text: str, tool_names: list[str] = None) -> "RemediationResult":
         """Parse fix description from remediation output."""
         fix_description = ""
@@ -179,6 +282,20 @@ class VerificationResult(BaseModel):
     """Structured output from the verification phase."""
     resolved: bool = Field(description="Whether the incident is resolved")
     reason: str = Field(default="", description="Why resolved or not")
+
+    @classmethod
+    def parse_safe(cls, text: str) -> "VerificationResult":
+        """
+        3-tier parse: JSON → regex fallback.
+        """
+        json_obj = _try_extract_json(text)
+        if json_obj:
+            try:
+                return cls.model_validate(json_obj)
+            except ValidationError as e:
+                logger.debug(f"VerificationResult JSON validation failed, falling back to regex: {e}")
+
+        return cls.parse_from_text(text)
 
     @classmethod
     def parse_from_text(cls, text: str) -> "VerificationResult":

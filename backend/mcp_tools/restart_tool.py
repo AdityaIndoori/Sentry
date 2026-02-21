@@ -9,6 +9,7 @@ import re
 
 from backend.shared.circuit_breaker import RateLimiter
 from backend.shared.security import SecurityGuard
+from backend.mcp_tools.tool_schemas import RestartServiceArgs, pydantic_to_input_schema
 
 logger = logging.getLogger(__name__)
 
@@ -79,14 +80,5 @@ class RestartServiceTool:
         return {
             "name": "restart_service",
             "description": "Restart a system service. Rate limited to 1/10min.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "service_name": {
-                        "type": "string",
-                        "description": "Name of the service to restart",
-                    }
-                },
-                "required": ["service_name"],
-            },
+            "input_schema": pydantic_to_input_schema(RestartServiceArgs),
         }

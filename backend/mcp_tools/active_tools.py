@@ -10,6 +10,7 @@ import shutil
 
 from backend.shared.circuit_breaker import RateLimiter
 from backend.shared.security import SecurityGuard
+from backend.mcp_tools.tool_schemas import RunDiagnosticsArgs, pydantic_to_input_schema
 
 logger = logging.getLogger(__name__)
 
@@ -60,14 +61,5 @@ class RunDiagnosticsTool:
         return {
             "name": "run_diagnostics",
             "description": "Run a whitelisted diagnostic command.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "Diagnostic command to run",
-                    }
-                },
-                "required": ["command"],
-            },
+            "input_schema": pydantic_to_input_schema(RunDiagnosticsArgs),
         }
