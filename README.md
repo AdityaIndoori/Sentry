@@ -182,10 +182,30 @@ docker compose up --build
 cd backend
 pip install -r requirements.txt
 cd ..
-python -m pytest -v
+python -m pytest
 ```
 
-**Test Results: 165 tests passing** — covering Zero Trust security (43), multi-agent architecture (24), orchestrator, tools, memory, schemas, circuit breaker, and API.
+**Test Results: 442 tests passing — 97% coverage** (enforced minimum: 95%)
+
+| Test File | Tests | Covers |
+|-----------|------:|--------|
+| `test_zero_trust.py` | 62 | Vault NHI, AI Gateway, Audit Log, Throttle, Tool Registry |
+| `test_agents.py` | 59 | All 5 agent roles + Supervisor routing (9 paths) |
+| `test_tools.py` | 71 | Read-only tools, active tools, executor hardening, retry logic |
+| `test_schemas.py` | 46 | LLM output parsing for all agent response formats |
+| `test_llm_client.py` | 38 | Provider factory, Anthropic + Bedrock clients, error handling |
+| `test_api.py` | 29 | All REST endpoints, config, watcher start/stop |
+| `test_security.py` | 26 | Path validation, command whitelist, URL allow-list, stop file |
+| `test_engine.py` | 18 | Orchestrator lifecycle, circuit breaker, memory save, FIFO cap |
+| `test_watcher.py` | 14 | Log polling, file rotation, queue full, PermissionError |
+| `test_config.py` | 14 | 12-factor config loading, defaults, env var parsing |
+| `test_services.py` | 14 | Service registry, context builder, topology fingerprint |
+| `test_domain_models.py` | 22 | Pydantic domain models, serialization, defaults |
+| `test_patch_tool.py` | 11 | apply_patch audit + active mode, git apply, backup/restore |
+| `test_circuit_breaker.py` | 10 | Cost tracking, rate limiter, auto-halt thresholds |
+| `test_memory.py` | 6 | Memory store CRUD, similarity search, compaction |
+
+Coverage is configured in `pytest.ini` and `.coveragerc`. The HTML report is generated at `htmlcov/index.html`.
 
 ## LLM Providers
 
@@ -392,16 +412,23 @@ All settings live in `.env` (copy from `.env.example`). Only **`ANTHROPIC_API_KE
 │   │   ├── security.py       # Path/command/URL validation
 │   │   ├── circuit_breaker.py # Cost tracking + auto-halt
 │   │   └── interfaces.py     # Abstract base classes (SOLID)
-│   ├── tests/
-│   │   ├── test_zero_trust.py  # 43 security tests (NEW)
-│   │   ├── test_agents.py      # 24 agent tests (NEW)
-│   │   ├── test_security.py    # Input validation tests
-│   │   ├── test_tools.py       # MCP tool tests
-│   │   ├── test_memory.py      # Memory store tests
-│   │   ├── test_schemas.py     # LLM output parsing tests
-│   │   ├── test_circuit_breaker.py
-│   │   ├── test_llm_client.py
-│   │   └── test_api.py
+│   ├── tests/                # 442 tests, 97% coverage
+│   │   ├── conftest.py           # Shared fixtures (security guards, tmp dirs)
+│   │   ├── test_zero_trust.py    # Vault, AI Gateway, Audit Log, Throttle, Tool Registry
+│   │   ├── test_agents.py        # All 5 agent roles + Supervisor routing
+│   │   ├── test_tools.py         # Read-only tools, active tools, executor hardening
+│   │   ├── test_schemas.py       # LLM output parsing for all response formats
+│   │   ├── test_llm_client.py    # Provider factory, Anthropic + Bedrock clients
+│   │   ├── test_api.py           # All REST endpoints, config, watcher
+│   │   ├── test_security.py      # Path, command, URL validation + stop file
+│   │   ├── test_engine.py        # Orchestrator lifecycle, circuit breaker, FIFO
+│   │   ├── test_watcher.py       # Log polling, rotation, queue full, errors
+│   │   ├── test_config.py        # 12-factor config loading, defaults
+│   │   ├── test_services.py      # Service registry, context builder
+│   │   ├── test_domain_models.py # Pydantic domain models, serialization
+│   │   ├── test_patch_tool.py    # apply_patch audit + active, git apply
+│   │   ├── test_circuit_breaker.py # Cost tracking, rate limiter
+│   │   └── test_memory.py        # Memory store CRUD, similarity, compaction
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── frontend/
@@ -416,7 +443,7 @@ All settings live in `.env` (copy from `.env.example`). Only **`ANTHROPIC_API_KE
 
 ## Design Principles
 
-- **TDD:** 165 tests written FIRST — security, agents, tools, memory, schemas, API
+- **TDD:** 442 tests (97% coverage) — security, agents, tools, orchestrator, schemas, API, config, services, watcher
 - **SOLID:**
   - **S**ingle Responsibility: Each agent does one thing (triage OR diagnose OR fix OR verify)
   - **O**pen/Closed: Tool registry extensible without modifying agents
@@ -426,7 +453,7 @@ All settings live in `.env` (copy from `.env.example`). Only **`ANTHROPIC_API_KE
 - **Clean Code:** Small functions, descriptive names, no magic numbers
 - **Zero Trust:** Every agent is untrusted by default; credentials are scoped and temporary
 - **Microservices:** Backend + Frontend as separate Docker containers
-- **Security First:** Defense in depth — 14 security layers active simultaneously
+- **Security First:** Defense in depth — 15 security layers active simultaneously
 
 ## API Endpoints
 

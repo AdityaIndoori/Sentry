@@ -19,7 +19,7 @@ Sentry is a "Self-Healing Server Monitor" that uses **Anthropic Claude LLMs** to
 
 ### 1.3 Implementation Status
 
-✅ **Fully implemented** with 165 passing tests, Docker microservice deployment, React dashboard, Zero Trust security, and Service Awareness Layer. See Section 11 for implementation details.
+✅ **Fully implemented** with 442 passing tests (97% coverage), Docker microservice deployment, React dashboard, Zero Trust security, and Service Awareness Layer. See Section 11 for implementation details.
 
 ---
 
@@ -416,7 +416,7 @@ This section documents what was actually built vs. the original design.
 | **LLM** | Anthropic Claude (configurable — defaults to Opus 4) | Via direct API or AWS Bedrock Gateway; model set via env vars |
 | **Orchestrator** | LangGraph-style state machine | Custom `IncidentGraph` with typed state |
 | **Container** | Docker Compose | 2 services: backend (:8000), frontend (:3000) |
-| **Testing** | pytest + pytest-asyncio | 165 tests, TDD approach |
+| **Testing** | pytest + pytest-asyncio | 442 tests, 97% coverage, TDD approach |
 | **Reverse Proxy** | nginx | Frontend serves static + proxies `/api` |
 
 ### 11.2 Multi-Agent Architecture
@@ -469,19 +469,25 @@ Both implement the `ILLMClient` interface (SOLID — Dependency Inversion).
 
 ### 11.5 Test Coverage
 
-**165 tests across 9 test files:**
+**442 tests across 16 test files — 97% coverage** (enforced minimum: 95%)
 
 | Test File | Tests | Coverage Area |
-|-----------|-------|---------------|
-| `test_zero_trust.py` | 43 | NHI Vault, AI Gateway, Audit Log, Throttle, Tool Registry |
-| `test_agents.py` | 24 | Agent identity, tool isolation, routing, gateway integration |
-| `test_security.py` | 20 | Path validation, command whitelist, URL allow-list, input sanitization |
-| `test_tools.py` | 14 | MCP tool execution, path traversal blocking, audit mode |
-| `test_llm_client.py` | 18 | Effort budgets, Opus client, Bedrock Gateway, factory |
-| `test_memory.py` | 10 | JSON store CRUD, fingerprint, keyword search |
-| `test_schemas.py` | 14 | LLM output parsing, validation |
-| `test_circuit_breaker.py` | 10 | Cost tracking, rate limiting, auto-halt |
-| `test_api.py` | 12 | Health, status, incidents, trigger, watcher endpoints |
+|-----------|------:|---------------|
+| `test_zero_trust.py` | 62 | Vault NHI, AI Gateway, Audit Log, Throttle, Tool Registry |
+| `test_agents.py` | 59 | All 5 agent roles + Supervisor routing (9 paths) |
+| `test_tools.py` | 71 | Read-only tools, active tools, executor hardening, retry logic |
+| `test_schemas.py` | 46 | LLM output parsing for all agent response formats |
+| `test_llm_client.py` | 38 | Provider factory, Anthropic + Bedrock clients, error handling |
+| `test_api.py` | 29 | All REST endpoints, config, watcher start/stop |
+| `test_security.py` | 26 | Path validation, command whitelist, URL allow-list, stop file |
+| `test_engine.py` | 18 | Orchestrator lifecycle, circuit breaker, memory save, FIFO cap |
+| `test_watcher.py` | 14 | Log polling, file rotation, queue full, PermissionError |
+| `test_config.py` | 14 | 12-factor config loading, defaults, env var parsing |
+| `test_services.py` | 14 | Service registry, context builder, topology fingerprint |
+| `test_domain_models.py` | 22 | Pydantic domain models, serialization, defaults |
+| `test_patch_tool.py` | 11 | apply_patch audit + active mode, git apply, backup/restore |
+| `test_circuit_breaker.py` | 10 | Cost tracking, rate limiter, auto-halt thresholds |
+| `test_memory.py` | 6 | Memory store CRUD, similarity search, compaction |
 
 ### 11.6 Docker Deployment
 
