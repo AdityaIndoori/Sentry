@@ -1,9 +1,0 @@
-2026/02/07 18:00:01 [notice] 1#1: nginx/1.25.4
-2026/02/07 18:00:01 [notice] 1#1: using the "epoll" event method
-2026/02/07 18:00:01 [notice] 1#1: start worker processes
-2026/02/07 18:04:55 [warn] 8#8: *142857 an upstream response is buffered to a temporary file /var/cache/nginx/proxy_temp/3/02/0000000023 while reading upstream, client: 10.0.2.18, server: api.example.com, request: "GET /api/v2/reports/export HTTP/1.1", upstream: "http://127.0.0.1:3000/api/v2/reports/export"
-2026/02/07 18:05:12 [error] 8#8: *142901 upstream prematurely closed connection while reading response header from upstream, client: 10.0.1.45, server: api.example.com, request: "POST /api/v2/checkout HTTP/1.1", upstream: "http://127.0.0.1:3000/api/v2/checkout", host: "api.example.com"
-2026/02/07 18:05:12 [error] 8#8: *142901 no live upstreams while connecting to upstream, client: 10.0.1.45, server: api.example.com, request: "POST /api/v2/checkout HTTP/1.1", upstream: "http://app_backend/api/v2/checkout", host: "api.example.com"
-2026/02/07 18:05:14 [error] 8#8: *142910 limiting requests, excess: 52.341 by zone "api_limit", client: 203.0.113.42, server: api.example.com, request: "GET /api/v2/products HTTP/1.1", host: "api.example.com"
-2026/02/07 18:05:15 [error] 8#8: *142915 connect() failed (111: Connection refused) while connecting to upstream, client: 10.0.3.12, server: api.example.com, request: "GET /api/v2/users/me HTTP/1.1", upstream: "http://127.0.0.1:3000/api/v2/users/me", host: "api.example.com"
-2026/02/07 18:05:15 [error] 8#8: *142916 connect() failed (111: Connection refused) while connecting to upstream, client: 10.0.1.88, server: api.example.com, request: "GET /health HTTP/1.1", upstream: "http://127.0.0.1:3000/health", host: "api.example.com"
