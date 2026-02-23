@@ -37,12 +37,16 @@ class RunDiagnosticsArgs(BaseModel):
 class ApplyPatchArgs(BaseModel):
     """Arguments for apply_patch tool."""
     file_path: str = Field(description="Relative path to file")
-    diff: str = Field(description="Unified diff to apply")
+    diff: str = Field(description="Unified diff to apply (must include --- a/ and +++ b/ headers and @@ hunk headers)")
 
 
 class RestartServiceArgs(BaseModel):
-    """Arguments for restart_service tool."""
-    service_name: str = Field(description="Name of the service to restart")
+    """Arguments for restart_service tool.
+    
+    No parameters needed — the restart command is configured
+    via the SERVICE_RESTART_CMD environment variable.
+    """
+    pass
 
 
 def pydantic_to_input_schema(model: type[BaseModel]) -> dict:

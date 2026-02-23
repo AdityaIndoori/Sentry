@@ -34,8 +34,10 @@ class SecurityConfig:
     restart_cooldown_seconds: int = 600  # 10 minutes
     allowed_diagnostic_commands: FrozenSet[str] = field(default_factory=lambda: frozenset({
         "ps aux", "netstat -tlnp", "curl", "tail", "df -h",
-        "free -m", "uptime", "systemctl status", "docker ps",
+        "free -m", "uptime", "systemctl status",
+        "docker ps", "docker inspect", "docker logs",
         "ping", "dig", "cat /proc/meminfo", "lsof -i",
+        "find", "ls",
     }))
     allowed_fetch_domains: FrozenSet[str] = field(default_factory=lambda: frozenset({
         "docs.python.org", "stackoverflow.com", "linux.die.net",
@@ -100,6 +102,7 @@ class AppConfig:
     llm_provider: LLMProvider = LLMProvider.ANTHROPIC
     watcher: WatcherConfig = field(default_factory=WatcherConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    audit_log_path: str = "/app/data/audit.jsonl"
     service_source_path: str = "/app/workspace"
     api_host: str = "0.0.0.0"
     api_port: int = 8000
