@@ -227,21 +227,30 @@ class BedrockGatewayLLMClient(ILLMClient):
 
     def __init__(self, config: BedrockGatewayConfig):
         self._config = config
-        # Lazy import so the openai package is only required when this provider is used
-        try:
-            from openai import AsyncOpenAI
-        except ImportError as exc:
-            raise ImportError(
-                "The 'openai' package is required for Bedrock Gateway support. "
-                "Install it with: pip install openai>=1.30.0"
-            ) from exc
-
-        self._client = AsyncOpenAI(
-            api_key=config.api_key,
-            base_url=config.base_url,
-        )
+        self._client = None  # Created lazily on first API call
         self._total_input = 0
         self._total_output = 0
+
+    def _get_client(self):
+        """Lazy-create the AsyncOpenAI client on first use.
+
+        This avoids creating async resources that trigger
+        'coroutine was never awaited' warnings when the client
+        is instantiated but never used (e.g. early-return on missing config).
+        """
+        if self._client is None:
+            try:
+                from openai import AsyncOpenAI
+            except ImportError as exc:
+                raise ImportError(
+                    "The 'openai' package is required for Bedrock Gateway support. "
+                    "Install it with: pip install openai>=1.30.0"
+                ) from exc
+            self._client = AsyncOpenAI(
+                api_key=self._config.api_key,
+                base_url=self._config.base_url,
+            )
+        return self._client
 
     async def analyze(
         self,
@@ -279,7 +288,8 @@ class BedrockGatewayLLMClient(ILLMClient):
 
     async def _raw_call(self, kwargs: dict) -> dict:
         """Single Bedrock Gateway API call attempt (used by retry wrapper)."""
-        response = await self._client.chat.completions.create(**kwargs)
+        client = self._get_client()
+        response = await client.chat.completions.create(**kwargs)
         return self._parse_response(response)
 
     def _convert_tools(self, anthropic_tools: list) -> list:
