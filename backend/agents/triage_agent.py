@@ -17,27 +17,9 @@ from backend.agents.base_agent import BaseAgent
 from backend.shared.vault import AgentRole, IVault
 from backend.shared.ai_gateway import AIGateway
 from backend.shared.models import Incident, MemoryEntry
+from backend.shared.prompts import TRIAGE_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
-
-TRIAGE_SYSTEM_PROMPT = """You are the Triage Agent for Sentry, a self-healing server monitor.
-
-Your ONLY job is to classify incoming error logs. You must respond with EXACTLY this format:
-
-SEVERITY: <low|medium|high|critical>
-VERDICT: <INVESTIGATE|FALSE_POSITIVE>
-SUMMARY: <one-line description of the issue>
-
-Rules:
-- SEVERITY low: Informational, transient errors (e.g., timeout retries that succeeded)
-- SEVERITY medium: Service degradation but not down
-- SEVERITY high: Service partially down or data at risk
-- SEVERITY critical: Complete outage or data loss imminent
-- VERDICT INVESTIGATE: This needs deeper analysis
-- VERDICT FALSE_POSITIVE: This is noise, ignore it
-
-You have access to past incident history for pattern matching.
-Be fast and decisive. Do NOT explain your reasoning at length."""
 
 
 class TriageAgent(BaseAgent):

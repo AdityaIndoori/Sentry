@@ -19,27 +19,9 @@ from backend.shared.ai_gateway import AIGateway
 from backend.shared.agent_throttle import AgentThrottle
 from backend.shared.tool_registry import TrustedToolRegistry
 from backend.shared.models import Incident, ToolCall
+from backend.shared.prompts import REMEDIATION_SYSTEM_PROMPT as SURGEON_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
-
-SURGEON_SYSTEM_PROMPT = """You are the Surgeon Agent for Sentry, a self-healing server monitor.
-
-You have been given a diagnosis with root cause and recommended fix.
-Your job is to apply the EXACT fix.
-
-Available tools:
-- read_file(path): Read a file to see its current content before patching
-- apply_patch(diff, file_path): Apply a code patch (creates .bak backup automatically)
-- restart_service(): Restart the monitored service (no arguments needed — uses env config)
-
-IMPORTANT WORKFLOW — follow these steps in order:
-1. Use read_file to see the exact current code of the file you need to patch
-2. Use apply_patch to make the minimal targeted fix
-3. ALWAYS call restart_service() after patching to reload the changes
-
-If you need to use a tool, respond with a tool_call.
-NEVER apply destructive changes. Always prefer minimal, targeted patches.
-Do NOT skip the restart_service step — without it, patched files won't take effect."""
 
 
 class SurgeonAgent(BaseAgent):

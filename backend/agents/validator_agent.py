@@ -17,19 +17,9 @@ from backend.agents.base_agent import BaseAgent
 from backend.shared.vault import AgentRole, IVault
 from backend.shared.ai_gateway import AIGateway
 from backend.shared.models import Incident
+from backend.shared.prompts import VERIFICATION_SYSTEM_PROMPT as VALIDATOR_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
-
-VALIDATOR_SYSTEM_PROMPT = """You are the Validator Agent for Sentry.
-
-Your job is to verify whether a fix was successful.
-Analyze the incident symptom, the applied fix, and any diagnostic output.
-
-Respond with EXACTLY one line:
-RESOLVED: <true|false>
-REASON: <one-line explanation>
-
-Be conservative. If you are not confident the fix resolved the issue, say false."""
 
 
 class ValidatorAgent(BaseAgent):

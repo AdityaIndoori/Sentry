@@ -18,28 +18,11 @@ from backend.shared.ai_gateway import AIGateway
 from backend.shared.agent_throttle import AgentThrottle
 from backend.shared.tool_registry import TrustedToolRegistry
 from backend.shared.models import Incident, ToolCall, ToolResult
+from backend.shared.prompts import DIAGNOSIS_SYSTEM_PROMPT as DETECTIVE_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
 MAX_TOOL_LOOPS = 8
-
-DETECTIVE_SYSTEM_PROMPT = """You are the Detective Agent for Sentry, a self-healing server monitor.
-
-Your job is to investigate the ROOT CAUSE of an incident. You have access to read-only tools:
-- read_file(path): Read a file on the server
-- grep_search(query, path): Search files for a pattern
-- run_diagnostics(command): Run safe diagnostic commands (ps, netstat, curl, tail, etc.)
-
-Investigate systematically:
-1. Read relevant configuration and code files
-2. Check system state with diagnostics
-3. Correlate findings
-
-When you have found the root cause, respond with EXACTLY this format:
-ROOT CAUSE: <clear description of the root cause>
-RECOMMENDED FIX: <specific fix to apply>
-
-If you need to use a tool, respond with a tool_call. Do NOT guess - investigate first."""
 
 
 class DetectiveAgent(BaseAgent):
