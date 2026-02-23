@@ -10,7 +10,7 @@ from typing import Optional
 
 from backend.shared.circuit_breaker import CostCircuitBreaker
 from backend.shared.config import AppConfig, SentryMode
-from backend.shared.interfaces import ILLMClient, IMemoryStore, IToolExecutor
+from backend.shared.interfaces import ILLMClient, IMemoryStore, IOrchestrator, IToolExecutor
 from backend.shared.models import (
     Incident, IncidentSeverity, IncidentState,
     LogEvent, MemoryEntry, ToolCall,
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 MAX_RESOLVED_INCIDENTS = 100
 
 
-class Orchestrator:
+class Orchestrator(IOrchestrator):
     """
     Core orchestrator that uses LangGraph for structured state transitions.
 

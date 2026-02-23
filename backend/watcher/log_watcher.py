@@ -12,12 +12,13 @@ from datetime import datetime, timezone
 from typing import AsyncIterator, Callable, Optional
 
 from backend.shared.config import WatcherConfig
+from backend.shared.interfaces import ILogWatcher
 from backend.shared.models import LogEvent
 
 logger = logging.getLogger(__name__)
 
 
-class LogWatcher:
+class LogWatcher(ILogWatcher):
     """Polls log files for error patterns and emits LogEvents."""
 
     def __init__(self, config: WatcherConfig):
