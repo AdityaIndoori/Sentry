@@ -27,6 +27,7 @@ class ReadFileTool:
         self._max_size = security._config.max_file_size_bytes
 
     async def execute(self, path: str) -> dict:
+        path = self._security.sanitize_input(path)
         if not self._security.validate_path(path):
             return {"success": False, "error": "Path validation failed"}
 
@@ -67,6 +68,7 @@ class GrepSearchTool:
         self._max_results = security._config.max_grep_results
 
     async def execute(self, query: str, path: str = ".") -> dict:
+        query = self._security.sanitize_input(query)
         if not self._security.validate_path(path):
             return {"success": False, "error": "Path validation failed"}
 

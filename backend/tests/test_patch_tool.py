@@ -9,7 +9,59 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from backend.shared.security import SecurityGuard
 from backend.shared.config import SecurityConfig, SentryMode
-from backend.mcp_tools.patch_tool import ApplyPatchTool
+from backend.mcp_tools.patch_tool import ApplyPatchTool, _apply_unified_diff
+
+
+class TestApplyUnifiedDiff:
+    """Tests for the pure-Python unified diff applier."""
+
+    def test_simple_replacement(self):
+        original = "line1\nline2\nline3\nline4"
+        diff = (
+            "--- a/test.py\n"
+            "+++ b/test.py\n"
+            "@@ -1,4 +1,4 @@\n"
+            " line1\n"
+            "-line2\n"
+            "+replaced2\n"
+            " line3\n"
+            " line4\n"
+        )
+        result = _apply_unified_diff(original, diff)
+        assert result is not None
+        assert "replaced2" in result
+        assert "line2" not in result
+
+    def test_addition(self):
+        original = "line1\nline2\nline3"
+        diff = (
+            "--- a/test.py\n"
+            "+++ b/test.py\n"
+            "@@ -1,3 +1,4 @@\n"
+            " line1\n"
+            " line2\n"
+            "+new_line\n"
+            " line3\n"
+        )
+        result = _apply_unified_diff(original, diff)
+        assert result is not None
+        assert "new_line" in result
+
+    def test_no_hunks_returns_none(self):
+        result = _apply_unified_diff("hello\n", "no hunks here\n")
+        assert result is None
+
+    def test_unmatched_context_returns_none(self):
+        original = "aaa\nbbb\nccc"
+        diff = (
+            "--- a/test.py\n"
+            "+++ b/test.py\n"
+            "@@ -1,1 +1,1 @@\n"
+            "-zzz_does_not_exist\n"
+            "+replacement\n"
+        )
+        result = _apply_unified_diff(original, diff)
+        assert result is None
 
 
 class TestApplyPatchToolAuditMode:
@@ -32,7 +84,6 @@ class TestApplyPatchToolAuditMode:
 
     @pytest.mark.asyncio
     async def test_file_not_found_audit_mode(self, tool):
-        """In audit mode, file existence IS checked before the audit branch."""
         result = await tool.execute("nonexistent.py", "diff content")
         assert result["success"] is False
         assert "not found" in result["error"].lower()
@@ -50,91 +101,58 @@ class TestApplyPatchToolActiveMode:
         assert "not found" in result["error"].lower()
 
     @pytest.mark.asyncio
-    async def test_backup_failure(self, tool, project_root):
-        with patch("shutil.copy2", side_effect=OSError("disk full")):
-            result = await tool.execute("config/db.py", "diff content")
-            assert result["success"] is False
-            assert "Backup failed" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_git_check_fails(self, tool, project_root):
-        """git apply --check fails => return error, cleanup temp file."""
-        mock_proc = AsyncMock()
-        mock_proc.communicate = AsyncMock(return_value=(b"", b"patch does not apply"))
-        mock_proc.returncode = 1
-
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc), \
-             patch("asyncio.wait_for", return_value=(b"", b"patch does not apply")):
-            mock_proc.communicate = AsyncMock(return_value=(b"", b"patch does not apply"))
-            result = await tool.execute("config/db.py", "bad diff")
-            assert result["success"] is False
-            assert "check failed" in result["error"].lower()
+    async def test_backup_failure_proceeds(self, tool, project_root):
+        """Backup failure logs warning but proceeds."""
+        with patch.object(tool, "_try_git_apply", return_value={"success": True}):
+            with patch("shutil.copyfile", side_effect=OSError("disk full")):
+                result = await tool.execute("config/db.py", "valid diff")
+                assert result["success"] is True
 
     @pytest.mark.asyncio
     async def test_git_apply_succeeds(self, tool, project_root):
-        """Full success path: backup, check, apply."""
-        # First call is git apply --check (success), second is git apply (success)
-        call_count = 0
-
-        async def mock_create_subprocess_exec(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            proc = AsyncMock()
-            proc.communicate = AsyncMock(return_value=(b"", b""))
-            proc.returncode = 0
-            return proc
-
-        with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess_exec), \
-             patch("asyncio.wait_for", return_value=(b"", b"")):
+        """Full success path through git apply."""
+        with patch.object(tool, "_try_git_apply", return_value={"success": True}):
             result = await tool.execute("config/db.py", "valid diff")
             assert result["success"] is True
-            assert "Patch applied" in result["output"]
+            assert "(git)" in result["output"]
 
     @pytest.mark.asyncio
-    async def test_git_apply_fails_restores_backup(self, tool, project_root):
-        """git apply fails after check passes => restore backup."""
-        call_count = 0
+    async def test_python_fallback_on_git_failure(self, tool, project_root):
+        """When git fails, python fallback should be tried."""
+        with open(os.path.join(project_root, "config", "db.py"), "r") as f:
+            content = f.read()
+        lines = content.split("\n")
+        first_line = lines[0]
+        second_line = lines[1] if len(lines) > 1 else ""
 
-        async def mock_create_subprocess_exec(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            proc = AsyncMock()
-            if call_count == 1:
-                # git apply --check succeeds
-                proc.communicate = AsyncMock(return_value=(b"", b""))
-                proc.returncode = 0
-            else:
-                # git apply fails
-                proc.communicate = AsyncMock(return_value=(b"", b"conflict"))
-                proc.returncode = 1
-            return proc
-
-        with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess_exec), \
-             patch("asyncio.wait_for") as mock_wait:
-            # Make wait_for just call the coroutine
-            async def pass_through(coro, **kwargs):
-                return await coro
-            mock_wait.side_effect = pass_through
-            result = await tool.execute("config/db.py", "conflicting diff")
-            assert result["success"] is False
-            assert "apply failed" in result["error"].lower()
+        diff = (
+            "--- a/config/db.py\n"
+            "+++ b/config/db.py\n"
+            "@@ -1,2 +1,2 @@\n"
+            f" {first_line}\n"
+            f"-{second_line}\n"
+            f"+{second_line}\n"
+        )
+        with patch.object(tool, "_try_git_apply", return_value={"success": False, "error": "corrupt"}):
+            result = await tool.execute("config/db.py", diff)
+            assert result["success"] is True
+            assert "(python)" in result["output"]
 
     @pytest.mark.asyncio
-    async def test_timeout(self, tool, project_root):
-        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_sub, \
-             patch("asyncio.wait_for", side_effect=asyncio.TimeoutError()):
-            mock_sub.return_value = AsyncMock()
-            result = await tool.execute("config/db.py", "diff")
+    async def test_both_methods_fail(self, tool, project_root):
+        """When both git and python fail, error is returned."""
+        with patch.object(tool, "_try_git_apply", return_value={"success": False, "error": "corrupt"}):
+            result = await tool.execute("config/db.py", "bad diff with no hunks")
             assert result["success"] is False
-            assert "timed out" in result["error"].lower()
+            assert "could not match" in result["error"].lower()
 
     @pytest.mark.asyncio
     async def test_generic_exception(self, tool, project_root):
-        with patch("shutil.copy2"):  # backup succeeds
-            with patch("tempfile.NamedTemporaryFile", side_effect=RuntimeError("temp error")):
-                result = await tool.execute("config/db.py", "diff")
-                assert result["success"] is False
-                assert "temp error" in result["error"]
+        """Exception during processing should be caught."""
+        with patch.object(tool, "_try_git_apply", side_effect=RuntimeError("unexpected")):
+            result = await tool.execute("config/db.py", "diff")
+            assert result["success"] is False
+            assert "unexpected" in result["error"]
 
 
 class TestApplyPatchToolDefinition:
