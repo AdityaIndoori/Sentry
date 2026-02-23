@@ -1,1 +1,3 @@
-# Log watcher microservice for Sentry
+"""Log file monitoring via polling."""
+
+__all__ = ["log_watcher"]

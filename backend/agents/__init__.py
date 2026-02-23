@@ -1,9 +1,10 @@
-"""
-Multi-Agent Architecture for Sentry.
+"""Multi-agent architecture: Supervisor, Triage, Detective, Surgeon, Validator."""
 
-Each agent has:
-- A unique Non-Human Identity (NHI) from the Vault
-- JIT credentials for each operation
-- Restricted tool access via the Tool Registry
-- All I/O scanned by the AI Gateway
-"""
+__all__ = [
+    "base_agent",
+    "supervisor",
+    "triage_agent",
+    "detective_agent",
+    "surgeon_agent",
+    "validator_agent",
+]
