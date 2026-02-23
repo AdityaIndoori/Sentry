@@ -4,7 +4,6 @@ omit =
     backend/tests/*
     backend/__init__.py
     */__init__.py
-    backend/orchestrator/graph.py
 
 [report]
 exclude_lines =
