@@ -56,10 +56,12 @@ class ValidatorAgent(BaseAgent):
                 f"Fix applied: {incident.fix_applied or 'None'}"
             )
 
+            # Bug fix #1: ILLMClient.analyze() signature is (prompt, effort, tools).
+            # Combine system prompt + user message into a single prompt string.
+            full_prompt = f"{VALIDATOR_SYSTEM_PROMPT}\n\nVerify this fix:\n\n{context}"
             response = await self._llm.analyze(
-                system_prompt=VALIDATOR_SYSTEM_PROMPT,
-                user_message=f"Verify this fix:\n\n{context}",
-                thinking={"type": "disabled"},
+                prompt=full_prompt,
+                effort="disabled",
             )
 
             text = response.get("text", "")
