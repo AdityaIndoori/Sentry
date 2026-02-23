@@ -97,7 +97,8 @@ class TestLoadConfig:
         env_copy = os.environ.copy()
         for key in ["SENTRY_MODE", "ANTHROPIC_API_KEY", "LLM_PROVIDER"]:
             env_copy.pop(key, None)
-        with patch.dict(os.environ, env_copy, clear=True):
+        with patch.dict(os.environ, env_copy, clear=True), \
+             patch("backend.shared.config.load_dotenv"):  # prevent .env file from overriding
             cfg = load_config()
             assert cfg.security.mode == SentryMode.AUDIT
             assert cfg.llm_provider == LLMProvider.ANTHROPIC
