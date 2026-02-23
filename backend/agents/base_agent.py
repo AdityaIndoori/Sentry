@@ -21,18 +21,6 @@ from backend.shared.security import SecurityGuard
 logger = logging.getLogger(__name__)
 
 
-# Module-level sanitizer for agents that don't have a SecurityGuard reference
-_DANGEROUS_CHARS = [";", "&&", "||", "|", "`", "$(", ">>", "<<"]
-
-
-def _sanitize(text: str) -> str:
-    """Strip dangerous shell characters from text."""
-    result = text
-    for char in _DANGEROUS_CHARS:
-        result = result.replace(char, "")
-    return result.strip()
-
-
 class BaseAgent(ABC):
     """Abstract base class for all Sentry agents."""
 
@@ -42,10 +30,12 @@ class BaseAgent(ABC):
         role: AgentRole,
         gateway: AIGateway,
         audit_log: Optional[ImmutableAuditLog] = None,
+        security: Optional[SecurityGuard] = None,
     ):
         self._vault = vault
         self._gateway = gateway
         self._audit_log = audit_log
+        self._security = security
         self._nhi = vault.register_agent(role)
         logger.info(f"Agent registered: {self._nhi.agent_id} (role={role.value})")
 
@@ -87,7 +77,17 @@ class BaseAgent(ABC):
     def _scan_input(self, text: str) -> str:
         """Sanitize input, then scan through AI Gateway. Raises if unsafe."""
         # Step 1: Sanitize — strip dangerous shell characters
-        sanitized = _sanitize(text)
+        # Uses SecurityGuard.sanitize_input() as single source of truth.
+        # Falls back to inline sanitization if no SecurityGuard was injected.
+        if self._security:
+            sanitized = self._security.sanitize_input(text)
+        else:
+            # Fallback for agents created without a SecurityGuard (e.g. in tests)
+            dangerous = [";", "&&", "||", "|", "`", "$(", ">>", "<<"]
+            sanitized = text
+            for char in dangerous:
+                sanitized = sanitized.replace(char, "")
+            sanitized = sanitized.strip()
 
         # Step 2: AI Gateway scan — detect prompt injection
         result = self._gateway.scan_input(sanitized)
