@@ -4,6 +4,7 @@ omit =
     backend/tests/*
     backend/__init__.py
     */__init__.py
+    backend/shared/constants.py
 
 [report]
 exclude_lines =
