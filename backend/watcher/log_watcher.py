@@ -96,10 +96,16 @@ class LogWatcher:
                     line_num += 1
                     for pattern in self._patterns:
                         if pattern.search(line):
+                            # Sanitize log line content to prevent shell injection
+                            sanitized_line = line.strip()[:500]
+                            for dangerous in [";", "&&", "||", "|", "`", "$(", ">>", "<<"]:
+                                sanitized_line = sanitized_line.replace(dangerous, "")
+                            sanitized_line = sanitized_line.strip()
+
                             # Bug fix #5: Use timezone-aware datetime instead of deprecated utcnow()
                             event = LogEvent(
                                 source_file=path,
-                                line_content=line.strip()[:500],
+                                line_content=sanitized_line,
                                 timestamp=datetime.now(timezone.utc),
                                 matched_pattern=pattern.pattern,
                                 line_number=line_num,
