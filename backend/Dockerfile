@@ -3,6 +3,13 @@ FROM python:3.12-slim AS base
 # Security: run as non-root
 RUN groupadd -r sentry && useradd -r -g sentry sentry
 
+# Install git (required by apply_patch tool for safe diff application)
+# Install docker-cli only (required by restart_service tool to restart containers via Docker socket)
+RUN apt-get update && apt-get install -y --no-install-recommends git curl \
+    && curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz \
+       | tar xz --strip-components=1 -C /usr/local/bin docker/docker \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Install dependencies first for layer caching
@@ -46,8 +53,10 @@ COPY --from=test /app/.tests-passed /tmp/.tests-passed
 RUN rm -f /tmp/.tests-passed
 
 # Create data and watched directories (writable volumes)
+# Add sentry to root group so it can access Docker socket (mounted at /var/run/docker.sock)
 RUN mkdir -p /app/data /app/watched && \
-    chown -R sentry:sentry /app
+    chown -R sentry:sentry /app && \
+    usermod -aG root sentry
 
 USER sentry
 

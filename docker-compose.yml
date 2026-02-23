@@ -15,6 +15,8 @@ services:
       - sentry-data:/app/data
       - ./watched:/app/watched
       - ${SERVICE_HOST_PATH:-./_no_service}:/app/workspace
+      # Docker socket — allows restart_service tool to restart monitored containers
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "8000:8000"
     restart: unless-stopped

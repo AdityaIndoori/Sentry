@@ -4,5 +4,4 @@ __pycache__
 .pytest_cache
 .env
 .git
-tests/
 *.md
