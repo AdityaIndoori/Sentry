@@ -121,19 +121,35 @@ def _build_diagnosis_summary_prompt(
     )
 
 
-def _build_remediation_prompt(incident: Incident, is_audit: bool) -> str:
+def _build_remediation_prompt(incident: Incident, is_audit: bool, tool_results: list = None) -> str:
+    # Include code context from diagnosis so the Surgeon sees actual source code
+    context = ""
+    if tool_results:
+        context = "\n\nCode investigated during diagnosis:\n"
+        for r in tool_results[-15:]:
+            context += f"  {r}\n"
+
     if is_audit:
         return (
             f"Root cause: {incident.root_cause}\n"
-            f"Symptom: {incident.symptom}\n\n"
+            f"Symptom: {incident.symptom}\n"
+            f"{context}\n"
             f"System is in AUDIT mode. Describe the fix you WOULD apply. "
             f"Do NOT call any tools. Just describe the plan.\n"
             f"End with: FIX PROPOSED: <one-line summary>"
         )
     return (
         f"Root cause: {incident.root_cause}\n"
-        f"Symptom: {incident.symptom}\n\n"
-        f"Propose and apply a fix. Be conservative - prefer restarts over code changes."
+        f"Symptom: {incident.symptom}\n"
+        f"{context}\n"
+        f"Apply a fix using the available tools. Follow this workflow:\n"
+        f"1. Use read_file to see the exact current code of the file(s) you need to patch.\n"
+        f"2. Use apply_patch to make the minimal targeted fix.\n"
+        f"3. CRITICAL: After patching, you MUST call restart_service (no arguments needed) "
+        f"to restart the monitored service so the code changes take effect. "
+        f"Without a restart, patched files won't be loaded by the running process.\n\n"
+        f"Be conservative - prefer minimal, targeted patches. "
+        f"Do NOT skip the restart_service step."
     )
 
 
@@ -312,7 +328,11 @@ class IncidentGraphBuilder:
         is_audit = self._config.security.mode == SentryMode.AUDIT
 
         try:
-            tools = self._tools.get_tool_definitions()
+            # IMPORTANT: Diagnosis agent gets READ-ONLY tools only.
+            # It must investigate and identify root cause but NEVER modify
+            # system state. Only the Remediation agent gets apply_patch
+            # and restart_service.
+            tools = self._tools.get_read_only_tool_definitions()
             service_context = state.get("service_context", "")
             prompt = _build_diagnosis_prompt(incident, self._config, service_context)
             max_loops = self._config.security.max_retries
@@ -433,7 +453,8 @@ class IncidentGraphBuilder:
         is_audit = self._config.security.mode == SentryMode.AUDIT
 
         try:
-            prompt = _build_remediation_prompt(incident, is_audit)
+            tool_results = state.get("tool_results", [])
+            prompt = _build_remediation_prompt(incident, is_audit, tool_results=tool_results)
             tools_used = []
 
             if is_audit:
@@ -450,36 +471,60 @@ class IncidentGraphBuilder:
                                       "Fix proposed (AUDIT — not executed)",
                                       detail=remediation.fix_description)
             else:
-                incident.current_agent_action = "Applying fix..."
-                incident.log_activity(ActivityType.LLM_CALL, "remediation",
-                                      "Requesting fix with tool access",
-                                      metadata={"effort": "medium"})
-                tools = self._tools.get_tool_definitions()
-                response = await self._llm.analyze(prompt, effort="medium", tools=tools)
-                self._track_cost(response)
-                for tc in response.get("tool_calls", []):
-                    args_summary = ", ".join(f"{k}={str(v)[:40]}" for k, v in tc.get("arguments", {}).items())
-                    incident.log_activity(ActivityType.TOOL_CALL, "remediation",
-                                          f"Applying: {tc['name']}",
-                                          detail=args_summary,
-                                          metadata={"tool": tc["name"]})
-                    call = ToolCall(tool_name=tc["name"], arguments=tc.get("arguments", {}))
-                    result = await self._tools.execute(call)
-                    tools_used.append(tc["name"])
-                    incident.log_activity(ActivityType.TOOL_RESULT, "remediation",
-                                          f"{tc['name']} → {'✓' if result.success else '✗'}",
-                                          detail=(result.output or result.error or "")[:300],
-                                          metadata={"success": result.success})
-                    if result.success:
-                        incident.fix_applied = f"{tc['name']}: {result.output[:200]}"
+                # Multi-step tool loop: Surgeon reads file, patches, restarts.
+                # Only expose read_file + active tools to prevent the LLM from
+                # wasting loops on grep_search/fetch_docs investigation.
+                tools = self._tools.get_remediation_tool_definitions()
+                max_remediation_loops = 4
+                remediation_prompt = prompt
+
+                for rem_loop in range(max_remediation_loops):
+                    incident.current_agent_action = f"Applying fix (step {rem_loop+1}/{max_remediation_loops})..."
+                    incident.log_activity(ActivityType.LLM_CALL, "remediation",
+                                          f"Requesting fix with tool access (step {rem_loop+1})",
+                                          metadata={"effort": "medium", "loop": rem_loop+1})
+
+                    response = await self._llm.analyze(remediation_prompt, effort="medium", tools=tools)
+                    self._track_cost(response)
+
+                    tool_calls = response.get("tool_calls", [])
+                    if not tool_calls:
+                        # No more tool calls — LLM provided a text response
+                        break
+
+                    for tc in tool_calls:
+                        args_summary = ", ".join(f"{k}={str(v)[:40]}" for k, v in tc.get("arguments", {}).items())
+                        incident.log_activity(ActivityType.TOOL_CALL, "remediation",
+                                              f"Applying: {tc['name']}",
+                                              detail=args_summary,
+                                              metadata={"tool": tc["name"]})
+                        call = ToolCall(tool_name=tc["name"], arguments=tc.get("arguments", {}))
+                        result = await self._tools.execute(call)
+                        tools_used.append(tc["name"])
+                        result_text = result.output or result.error or ""
+                        # Feed tool results back into the prompt for the next loop
+                        remediation_prompt += f"\n\nTool {tc['name']} result: {result_text[:2000]}"
+                        incident.log_activity(ActivityType.TOOL_RESULT, "remediation",
+                                              f"{tc['name']} → {'✓' if result.success else '✗'}",
+                                              detail=result_text[:300],
+                                              metadata={"success": result.success})
+                        if result.success and tc["name"] == "apply_patch":
+                            incident.fix_applied = f"{tc['name']}: {result_text[:200]}"
+                        elif result.success and tc["name"] == "restart_service":
+                            incident.fix_applied = f"{tc['name']}: {result_text[:200]}"
+
+                    # Cap prompt size
+                    if len(remediation_prompt) > 50000:
+                        remediation_prompt = remediation_prompt[:25000] + "\n\n[...truncated...]\n\n" + remediation_prompt[-20000:]
+
                 text = response.get("text", "")
                 remediation = RemediationResult.parse_safe(text, tools_used)
                 if not incident.fix_applied:
                     incident.fix_applied = remediation.fix_description
                 incident.log_activity(ActivityType.DECISION, "remediation",
-                                      "Fix applied" if tools_used else "Fix described",
+                                      "Fix applied" if any(t in tools_used for t in ("apply_patch", "restart_service")) else "Fix described",
                                       detail=incident.fix_applied or "No fix",
-                                      metadata={"tools_used": tools_used})
+                                      metadata={"tools_used": tools_used, "loops": rem_loop + 1})
 
             incident.state = IncidentState.VERIFICATION
             incident.log_activity(ActivityType.PHASE_COMPLETE, "remediation", "Remediation complete")

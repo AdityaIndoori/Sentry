@@ -57,7 +57,22 @@ class IToolExecutor(ABC):
 
     @abstractmethod
     def get_tool_definitions(self) -> list:
-        """Return tool definitions for LLM context."""
+        """Return all tool definitions for LLM context."""
+
+    @abstractmethod
+    def get_read_only_tool_definitions(self) -> list:
+        """Return only read-only tool definitions (no apply_patch, restart_service).
+        
+        Used by the Diagnosis agent which must investigate but never modify.
+        """
+
+    @abstractmethod
+    def get_remediation_tool_definitions(self) -> list:
+        """Return tools for the Remediation agent: read_file + active tools.
+        
+        Excludes grep_search, fetch_docs, run_diagnostics to prevent the LLM
+        from wasting tool loops on investigation instead of applying fixes.
+        """
 
 
 class IMemoryStore(ABC):

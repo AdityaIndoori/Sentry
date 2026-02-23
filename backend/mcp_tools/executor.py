@@ -19,6 +19,7 @@ from backend.shared.config import SecurityConfig, SentryMode
 from backend.shared.interfaces import IToolExecutor
 from backend.shared.models import ToolCall, ToolCategory, ToolResult
 from backend.shared.security import SecurityGuard
+from backend.shared.audit_log import ImmutableAuditLog
 
 from .active_tools import RunDiagnosticsTool
 from .patch_tool import ApplyPatchTool
@@ -50,8 +51,9 @@ def _is_tool_transient(error_str: str) -> bool:
 class MCPToolExecutor(IToolExecutor):
     """Routes tool calls to implementations with security checks."""
 
-    def __init__(self, security: SecurityGuard, project_root: str):
+    def __init__(self, security: SecurityGuard, project_root: str, audit_log: Optional[ImmutableAuditLog] = None):
         self._security = security
+        self._audit_log = audit_log
         self._rate_limiter = RateLimiter()
 
         # Initialize tools
@@ -74,8 +76,34 @@ class MCPToolExecutor(IToolExecutor):
             "restart_service": (self._restart, ToolCategory.ACTIVE),
         }
 
+    def _audit(self, action: str, detail: str, result: str = "", metadata: Optional[dict] = None):
+        """Log to immutable audit trail if configured."""
+        if self._audit_log:
+            self._audit_log.log_action(
+                agent_id="tool_executor",
+                action=action,
+                detail=detail,
+                result=result,
+                metadata=metadata,
+            )
+
     async def execute(self, tool_call: ToolCall) -> ToolResult:
+        # --- Sanitize all string arguments before processing ---
+        sanitized_args = {}
+        for key, val in (tool_call.arguments or {}).items():
+            if isinstance(val, str):
+                sanitized_args[key] = self._security.sanitize_input(val)
+            else:
+                sanitized_args[key] = val
+        tool_call = ToolCall(tool_name=tool_call.tool_name, arguments=sanitized_args)
+
         if self._security.is_stopped():
+            self._audit(
+                "tool_blocked",
+                f"tool={tool_call.tool_name}",
+                "STOP_SENTRY active",
+                metadata={"tool": tool_call.tool_name, "reason": "stop_file"},
+            )
             return ToolResult(
                 tool_name=tool_call.tool_name,
                 success=False,
@@ -84,6 +112,12 @@ class MCPToolExecutor(IToolExecutor):
 
         # Bug fix #14: DISABLED mode should block ALL tool execution
         if self._security.mode == SentryMode.DISABLED:
+            self._audit(
+                "tool_blocked",
+                f"tool={tool_call.tool_name}",
+                "DISABLED mode",
+                metadata={"tool": tool_call.tool_name, "reason": "disabled_mode"},
+            )
             return ToolResult(
                 tool_name=tool_call.tool_name,
                 success=False,
@@ -107,6 +141,12 @@ class MCPToolExecutor(IToolExecutor):
             logger.info(
                 f"[AUDIT] Blocked active tool at executor level: "
                 f"{tool_call.tool_name}"
+            )
+            self._audit(
+                "tool_blocked",
+                f"tool={tool_call.tool_name}",
+                "AUDIT mode",
+                metadata={"tool": tool_call.tool_name, "reason": "audit_mode"},
             )
             return ToolResult(
                 tool_name=tool_call.tool_name,
@@ -163,6 +203,12 @@ class MCPToolExecutor(IToolExecutor):
                     success = False
                     error = error or "Tool returned success but produced no output"
 
+                self._audit(
+                    "tool_execution",
+                    f"tool={tool_call.tool_name}, category={category.value}",
+                    f"success={success}",
+                    metadata={"tool": tool_call.tool_name, "success": success, "category": category.value},
+                )
                 return ToolResult(
                     tool_name=tool_call.tool_name,
                     success=success,
@@ -212,6 +258,7 @@ class MCPToolExecutor(IToolExecutor):
         )
 
     def get_tool_definitions(self) -> list:
+        """Return all tool definitions (read-only + active). Used by Remediation."""
         return [
             ReadFileTool.definition(),
             GrepSearchTool.definition(),
@@ -219,4 +266,30 @@ class MCPToolExecutor(IToolExecutor):
             RunDiagnosticsTool.definition(),
             ApplyPatchTool.definition(),
             RestartServiceTool.definition(),
+        ]
+
+    def get_read_only_tool_definitions(self) -> list:
+        """Return only read-only tool definitions. Used by Diagnosis.
+
+        The Diagnosis agent must investigate but NEVER modify system state.
+        It should not see apply_patch or restart_service as available tools.
+        """
+        return [
+            defn for name, (tool, category) in self._tool_map.items()
+            if category == ToolCategory.READ_ONLY
+            for defn in [tool.definition()]
+        ]
+
+    def get_remediation_tool_definitions(self) -> list:
+        """Return tools for Remediation: read_file + active tools only.
+
+        Excludes grep_search, fetch_docs, run_diagnostics to prevent the LLM
+        from wasting tool loops on investigation instead of applying fixes.
+        The diagnosis phase already gathered all needed context.
+        """
+        _REMEDIATION_TOOLS = {"read_file", "apply_patch", "restart_service"}
+        return [
+            tool.definition()
+            for name, (tool, category) in self._tool_map.items()
+            if name in _REMEDIATION_TOOLS
         ]

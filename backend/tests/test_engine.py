@@ -44,6 +44,8 @@ def mock_llm():
 def mock_tools():
     tools = AsyncMock()
     tools.get_tool_definitions = MagicMock(return_value=[])
+    tools.get_read_only_tool_definitions = MagicMock(return_value=[])
+    tools.get_remediation_tool_definitions = MagicMock(return_value=[])
     return tools
 
 

@@ -25,18 +25,21 @@ logger = logging.getLogger(__name__)
 SURGEON_SYSTEM_PROMPT = """You are the Surgeon Agent for Sentry, a self-healing server monitor.
 
 You have been given a diagnosis with root cause and recommended fix.
-Your job is to propose the EXACT fix to apply.
+Your job is to apply the EXACT fix.
 
 Available tools:
+- read_file(path): Read a file to see its current content before patching
 - apply_patch(diff, file_path): Apply a code patch (creates .bak backup automatically)
-- restart_service(service_name): Restart a system service
+- restart_service(): Restart the monitored service (no arguments needed — uses env config)
 
-Respond with EXACTLY this format:
-FIX PROPOSED: <one-line description of the fix>
-FIX DETAILS: <multi-line technical details if needed>
+IMPORTANT WORKFLOW — follow these steps in order:
+1. Use read_file to see the exact current code of the file you need to patch
+2. Use apply_patch to make the minimal targeted fix
+3. ALWAYS call restart_service() after patching to reload the changes
 
 If you need to use a tool, respond with a tool_call.
-NEVER apply destructive changes. Always prefer minimal, targeted patches."""
+NEVER apply destructive changes. Always prefer minimal, targeted patches.
+Do NOT skip the restart_service step — without it, patched files won't take effect."""
 
 
 class SurgeonAgent(BaseAgent):
@@ -55,8 +58,9 @@ class SurgeonAgent(BaseAgent):
         gateway: AIGateway,
         throttle: AgentThrottle,
         config: Any,
+        audit_log=None,
     ):
-        super().__init__(vault, AgentRole.SURGEON, gateway)
+        super().__init__(vault, AgentRole.SURGEON, gateway, audit_log=audit_log)
         self._llm = llm
         self._tools = tools
         self._registry = registry

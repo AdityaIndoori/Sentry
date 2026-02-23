@@ -68,6 +68,10 @@ def mock_tools():
         {"name": "read_file", "description": "Read a file"},
         {"name": "grep_search", "description": "Search files"},
     ])
+    tools.get_read_only_tool_definitions = MagicMock(return_value=[
+        {"name": "read_file", "description": "Read a file"},
+        {"name": "grep_search", "description": "Search files"},
+    ])
     return tools
 
 

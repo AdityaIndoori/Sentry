@@ -144,20 +144,18 @@ class TestRestartServiceTool:
 
     @pytest.mark.asyncio
     async def test_audit_mode_logs_only(self, tool):
-        result = await tool.execute("nginx")
-        assert result["success"] is True
-        assert result["audit_only"] is True
+        with patch.dict(os.environ, {"SERVICE_RESTART_CMD": "docker restart shopapi"}):
+            result = await tool.execute()
+            assert result["success"] is True
+            assert result["audit_only"] is True
 
     @pytest.mark.asyncio
-    async def test_blocks_invalid_service_name(self, tool):
-        result = await tool.execute("nginx; rm -rf /")
-        assert result["success"] is False
-        assert "Invalid" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_blocks_special_chars(self, tool):
-        result = await tool.execute("../../../etc")
-        assert result["success"] is False
+    async def test_missing_env_var_returns_error(self, tool):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SERVICE_RESTART_CMD", None)
+            result = await tool.execute()
+            assert result["success"] is False
+            assert "SERVICE_RESTART_CMD" in result["error"]
 
 
 class TestToolDefinitions:
@@ -175,7 +173,7 @@ class TestToolDefinitions:
     def test_restart_definition(self):
         defn = RestartServiceTool.definition()
         assert defn["name"] == "restart_service"
-        assert "service_name" in defn["input_schema"]["properties"]
+        assert defn["input_schema"]["type"] == "object"
 
 
 # ===========================================================================
@@ -219,9 +217,10 @@ class TestToolArgModels:
         with pytest.raises(ValidationError):
             ApplyPatchArgs(file_path="config/db.py")
 
-    def test_restart_service_args(self):
-        args = RestartServiceArgs(service_name="nginx")
-        assert args.service_name == "nginx"
+    def test_restart_service_args_empty(self):
+        """RestartServiceArgs has no params — command comes from env."""
+        args = RestartServiceArgs()
+        assert args is not None
 
 
 class TestPydanticToInputSchema:
@@ -530,6 +529,69 @@ class TestExecutorToolDefinitions:
         assert def_names == expected
 
 
+class TestExecutorReadOnlyToolDefinitions:
+    """Tests for get_read_only_tool_definitions() — Diagnosis agent must NOT get write tools."""
+
+    def test_returns_only_read_only_tools(self, security_guard, project_root):
+        executor = MCPToolExecutor(security_guard, project_root)
+        defs = executor.get_read_only_tool_definitions()
+        names = {d["name"] for d in defs}
+        assert "read_file" in names
+        assert "grep_search" in names
+        assert "fetch_docs" in names
+        # These MUST NOT be present — Diagnosis agent is read-only
+        assert "apply_patch" not in names
+        assert "restart_service" not in names
+        assert "run_diagnostics" not in names
+
+    def test_read_only_count(self, security_guard, project_root):
+        executor = MCPToolExecutor(security_guard, project_root)
+        defs = executor.get_read_only_tool_definitions()
+        assert len(defs) == 3  # read_file, grep_search, fetch_docs
+
+    def test_read_only_definitions_have_required_fields(self, security_guard, project_root):
+        executor = MCPToolExecutor(security_guard, project_root)
+        for defn in executor.get_read_only_tool_definitions():
+            assert "name" in defn
+            assert "description" in defn
+            assert "input_schema" in defn
+
+    def test_full_definitions_still_include_all(self, security_guard, project_root):
+        """get_tool_definitions() must still return all 6 tools."""
+        executor = MCPToolExecutor(security_guard, project_root)
+        all_defs = executor.get_tool_definitions()
+        ro_defs = executor.get_read_only_tool_definitions()
+        assert len(all_defs) == 6
+
+
+class TestExecutorRemediationToolDefinitions:
+    """Tests for get_remediation_tool_definitions() — only read_file + active tools."""
+
+    def test_returns_only_remediation_tools(self, security_guard, project_root):
+        executor = MCPToolExecutor(security_guard, project_root)
+        defs = executor.get_remediation_tool_definitions()
+        names = {d["name"] for d in defs}
+        assert "apply_patch" in names
+        assert "restart_service" in names
+        assert "read_file" in names
+        # Must NOT include investigation tools
+        assert "grep_search" not in names
+        assert "fetch_docs" not in names
+        assert "run_diagnostics" not in names
+
+    def test_remediation_count(self, security_guard, project_root):
+        executor = MCPToolExecutor(security_guard, project_root)
+        defs = executor.get_remediation_tool_definitions()
+        assert len(defs) == 3  # read_file, apply_patch, restart_service
+
+    def test_remediation_definitions_have_required_fields(self, security_guard, project_root):
+        executor = MCPToolExecutor(security_guard, project_root)
+        for defn in executor.get_remediation_tool_definitions():
+            assert "name" in defn
+            assert "description" in defn
+            assert "input_schema" in defn
+
+
 # ===========================================================================
 # FetchDocsTool tests
 # ===========================================================================
@@ -660,7 +722,7 @@ class TestRunDiagnosticsActiveMode:
 
 
 class TestRestartServiceActiveMode:
-    """Tests for RestartServiceTool in ACTIVE mode."""
+    """Tests for RestartServiceTool in ACTIVE mode (env-configured command)."""
 
     @pytest.fixture
     def tool(self, active_security_guard, rate_limiter):
@@ -669,51 +731,56 @@ class TestRestartServiceActiveMode:
     @pytest.mark.asyncio
     async def test_active_mode_success(self, tool):
         mock_proc = AsyncMock()
-        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_proc.communicate = AsyncMock(return_value=(b"shopapi\n", b""))
         mock_proc.returncode = 0
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc), \
-             patch("asyncio.wait_for", return_value=(b"", b"")):
-            mock_proc.communicate = AsyncMock(return_value=(b"", b""))
-            result = await tool.execute("nginx")
+        with patch.dict(os.environ, {"SERVICE_RESTART_CMD": "docker restart shopapi"}), \
+             patch("asyncio.create_subprocess_shell", return_value=mock_proc), \
+             patch("asyncio.wait_for", return_value=(b"shopapi\n", b"")):
+            mock_proc.communicate = AsyncMock(return_value=(b"shopapi\n", b""))
+            result = await tool.execute()
             assert result["success"] is True
             assert "Restarted" in result["output"]
 
     @pytest.mark.asyncio
     async def test_active_mode_restart_fails(self, tool):
         mock_proc = AsyncMock()
-        mock_proc.communicate = AsyncMock(return_value=(b"", b"Unit not found"))
+        mock_proc.communicate = AsyncMock(return_value=(b"", b"No such container"))
         mock_proc.returncode = 1
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc), \
-             patch("asyncio.wait_for", return_value=(b"", b"Unit not found")):
-            mock_proc.communicate = AsyncMock(return_value=(b"", b"Unit not found"))
-            result = await tool.execute("nginx")
+        with patch.dict(os.environ, {"SERVICE_RESTART_CMD": "docker restart badname"}), \
+             patch("asyncio.create_subprocess_shell", return_value=mock_proc), \
+             patch("asyncio.wait_for", return_value=(b"", b"No such container")):
+            mock_proc.communicate = AsyncMock(return_value=(b"", b"No such container"))
+            result = await tool.execute()
             assert result["success"] is False
             assert "failed" in result["error"].lower()
 
     @pytest.mark.asyncio
     async def test_active_mode_rate_limited(self, tool, rate_limiter):
         # Record a recent restart to trigger rate limit
-        rate_limiter.record("restart:nginx")
-        result = await tool.execute("nginx")
-        assert result["success"] is False
-        assert "Rate limited" in result["error"]
+        rate_limiter.record("restart:service")
+        with patch.dict(os.environ, {"SERVICE_RESTART_CMD": "docker restart shopapi"}):
+            result = await tool.execute()
+            assert result["success"] is False
+            assert "Rate limited" in result["error"]
 
     @pytest.mark.asyncio
     async def test_active_mode_timeout(self, tool):
-        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_sub:
+        with patch.dict(os.environ, {"SERVICE_RESTART_CMD": "docker restart shopapi"}), \
+             patch("asyncio.create_subprocess_shell", new_callable=AsyncMock) as mock_sub:
             mock_proc = AsyncMock()
             mock_sub.return_value = mock_proc
             with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError()):
-                result = await tool.execute("nginx")
+                result = await tool.execute()
                 assert result["success"] is False
                 assert "timed out" in result["error"].lower()
 
     @pytest.mark.asyncio
     async def test_active_mode_exception(self, tool):
-        with patch("asyncio.create_subprocess_exec", side_effect=OSError("exec failed")):
-            result = await tool.execute("nginx")
+        with patch.dict(os.environ, {"SERVICE_RESTART_CMD": "docker restart shopapi"}), \
+             patch("asyncio.create_subprocess_shell", side_effect=OSError("exec failed")):
+            result = await tool.execute()
             assert result["success"] is False
             assert "exec failed" in result["error"]
 

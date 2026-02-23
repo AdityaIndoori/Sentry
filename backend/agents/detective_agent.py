@@ -56,8 +56,9 @@ class DetectiveAgent(BaseAgent):
         registry: TrustedToolRegistry,
         gateway: AIGateway,
         throttle: AgentThrottle,
+        audit_log=None,
     ):
-        super().__init__(vault, AgentRole.DETECTIVE, gateway)
+        super().__init__(vault, AgentRole.DETECTIVE, gateway, audit_log=audit_log)
         self._llm = llm
         self._tools = tools
         self._registry = registry
@@ -87,8 +88,9 @@ class DetectiveAgent(BaseAgent):
                 # Bug fix #1: ILLMClient.analyze() signature is (prompt, effort, tools).
                 # Combine system prompt + messages into a single prompt string.
                 full_prompt = f"{DETECTIVE_SYSTEM_PROMPT}\n\n" + "\n\n".join(messages)
-                # Get tool definitions for the LLM to use
-                tool_defs = self._tools.get_tool_definitions() if hasattr(self._tools, 'get_tool_definitions') else None
+                # IMPORTANT: Detective gets READ-ONLY tools only.
+                # It must investigate but NEVER modify system state.
+                tool_defs = self._tools.get_read_only_tool_definitions() if hasattr(self._tools, 'get_read_only_tool_definitions') else None
                 response = await self._llm.analyze(
                     prompt=full_prompt,
                     effort="high",
@@ -130,6 +132,12 @@ class DetectiveAgent(BaseAgent):
                         call = ToolCall(tool_name=tool_name, arguments=tool_args)
                         result = await self._tools.execute(call)
                         safe_output = self._scan_and_redact_output(result.output)
+                        self._audit(
+                            "tool_executed",
+                            f"tool={tool_name}, args={tool_args}",
+                            f"success={result.success}",
+                            metadata={"tool": tool_name, "success": result.success, "incident_id": incident.id},
+                        )
                         tool_results.append({
                             "tool": tool_name,
                             "args": tool_args,
