@@ -7,6 +7,7 @@ import sys
 import tempfile
 
 import pytest
+from unittest.mock import AsyncMock, MagicMock
 
 # Ensure backend is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -15,6 +16,7 @@ from backend.shared.config import (
     AppConfig, AnthropicConfig, MemoryConfig,
     SecurityConfig, SentryMode, WatcherConfig,
 )
+from backend.shared.interfaces import ILLMClient, IMemoryStore, IToolExecutor
 from backend.shared.security import SecurityGuard
 from backend.shared.circuit_breaker import CostCircuitBreaker, RateLimiter
 
@@ -88,3 +90,50 @@ def app_config(security_config, memory_config):
         security=security_config,
         memory=memory_config,
     )
+
+
+# ═══════════════════════════════════════════════════════════════
+# SPEC'D MOCK FIXTURES — enforce interface contracts at test time
+# ═══════════════════════════════════════════════════════════════
+
+@pytest.fixture
+def spec_mock_llm():
+    """LLM mock that enforces ILLMClient contract via spec=.
+    
+    Using spec= means calling analyze() with wrong kwargs
+    (e.g. system_prompt=, user_message=) will raise TypeError.
+    """
+    llm = AsyncMock(spec=ILLMClient)
+    llm.analyze.return_value = {
+        "text": "",
+        "tool_calls": [],
+        "thinking": "",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "error": None,
+    }
+    llm.get_usage.return_value = {
+        "total_input_tokens": 0,
+        "total_output_tokens": 0,
+    }
+    return llm
+
+
+@pytest.fixture
+def spec_mock_tools():
+    """Tool executor mock that enforces IToolExecutor contract via spec=."""
+    tools = AsyncMock(spec=IToolExecutor)
+    tools.get_tool_definitions.return_value = []
+    tools.get_read_only_tool_definitions.return_value = []
+    tools.get_remediation_tool_definitions.return_value = []
+    return tools
+
+
+@pytest.fixture
+def spec_mock_memory():
+    """Memory store mock that enforces IMemoryStore contract via spec=."""
+    mem = AsyncMock(spec=IMemoryStore)
+    mem.load.return_value = []
+    mem.get_count.return_value = 0
+    mem.get_relevant.return_value = []
+    return mem
