@@ -85,7 +85,7 @@ class DetectiveAgent(BaseAgent):
 
                 # If no tool calls, we have a final answer
                 if not tool_calls:
-                    result = self._parse_response(text)
+                    result = self._parse_using_schema(text)
                     result["tool_results"] = [
                         tr if isinstance(tr, dict) else {"output": str(tr)}
                         for tr in tool_results
@@ -143,21 +143,12 @@ class DetectiveAgent(BaseAgent):
         finally:
             self._vault.revoke_credential(cred.credential_id)
 
-    def _parse_response(self, text: str) -> dict:
-        """Parse the detective's diagnosis response."""
-        import re
-        result = {
-            "root_cause": "Unknown",
-            "recommended_fix": "None",
+    def _parse_using_schema(self, text: str) -> dict:
+        """Parse using the canonical DiagnosisResult schema (single source of truth)."""
+        from backend.orchestrator.schemas import DiagnosisResult
+        diagnosis = DiagnosisResult.parse_safe(text)
+        return {
+            "root_cause": diagnosis.root_cause,
+            "recommended_fix": diagnosis.recommended_fix,
             "raw_text": text,
         }
-
-        rc_match = re.search(r"ROOT\s*CAUSE:\s*(.+?)(?:\n|$)", text, re.IGNORECASE)
-        if rc_match:
-            result["root_cause"] = rc_match.group(1).strip()
-
-        fix_match = re.search(r"RECOMMENDED\s*FIX:\s*(.+?)(?:\n|$)", text, re.IGNORECASE)
-        if fix_match:
-            result["recommended_fix"] = fix_match.group(1).strip()
-
-        return result

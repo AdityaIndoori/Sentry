@@ -70,7 +70,7 @@ class TriageAgent(BaseAgent):
             )
 
             text = response.get("text", "")
-            parsed = self._parse_response(text)
+            parsed = self._parse_using_schema(text)
 
             # Audit log the triage verdict
             self._audit(
@@ -85,28 +85,13 @@ class TriageAgent(BaseAgent):
             # Always revoke credential after use
             self._vault.revoke_credential(cred.credential_id)
 
-    def _parse_response(self, text: str) -> dict:
-        """Parse the structured triage response."""
-        result = {
-            "severity": "medium",
-            "verdict": "INVESTIGATE",
-            "summary": "Unable to parse triage response",
+    def _parse_using_schema(self, text: str) -> dict:
+        """Parse using the canonical TriageResult schema (single source of truth)."""
+        from backend.orchestrator.schemas import TriageResult
+        triage = TriageResult.parse_safe(text)
+        return {
+            "severity": triage.severity,
+            "verdict": triage.verdict,
+            "summary": triage.summary,
             "raw_text": text,
         }
-
-        # Parse SEVERITY
-        sev_match = re.search(r"SEVERITY:\s*(low|medium|high|critical)", text, re.IGNORECASE)
-        if sev_match:
-            result["severity"] = sev_match.group(1).lower()
-
-        # Parse VERDICT
-        verdict_match = re.search(r"VERDICT:\s*(INVESTIGATE|FALSE_POSITIVE)", text, re.IGNORECASE)
-        if verdict_match:
-            result["verdict"] = verdict_match.group(1).upper()
-
-        # Parse SUMMARY
-        summary_match = re.search(r"SUMMARY:\s*(.+)", text)
-        if summary_match:
-            result["summary"] = summary_match.group(1).strip()
-
-        return result

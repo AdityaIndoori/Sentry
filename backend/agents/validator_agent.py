@@ -55,26 +55,17 @@ class ValidatorAgent(BaseAgent):
             )
 
             text = response.get("text", "")
-            return self._parse_response(text)
+            return self._parse_using_schema(text)
 
         finally:
             self._vault.revoke_credential(cred.credential_id)
 
-    def _parse_response(self, text: str) -> dict:
-        result = {"resolved": False, "reason": "Unable to parse", "raw_text": text}
-
-        resolved_match = re.search(r"RESOLVED:\s*(true|false)", text, re.IGNORECASE)
-        if resolved_match:
-            result["resolved"] = resolved_match.group(1).lower() == "true"
-
-        reason_match = re.search(r"REASON:\s*(.+)", text, re.IGNORECASE)
-        if reason_match:
-            result["reason"] = reason_match.group(1).strip()
-        else:
-            # If we can't parse, check if the text seems positive
-            lower = text.lower()
-            if "resolved" in lower or "fixed" in lower or "successful" in lower:
-                result["resolved"] = True
-                result["reason"] = text[:200]
-
-        return result
+    def _parse_using_schema(self, text: str) -> dict:
+        """Parse using the canonical VerificationResult schema (single source of truth)."""
+        from backend.orchestrator.schemas import VerificationResult
+        verification = VerificationResult.parse_safe(text)
+        return {
+            "resolved": verification.resolved,
+            "reason": verification.reason,
+            "raw_text": text,
+        }
