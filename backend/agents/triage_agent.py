@@ -46,8 +46,8 @@ class TriageAgent(BaseAgent):
     No tools - pure analysis of the log snippet + memory hints.
     """
 
-    def __init__(self, vault: IVault, llm: Any, gateway: AIGateway):
-        super().__init__(vault, AgentRole.TRIAGE, gateway)
+    def __init__(self, vault: IVault, llm: Any, gateway: AIGateway, audit_log=None):
+        super().__init__(vault, AgentRole.TRIAGE, gateway, audit_log=audit_log)
         self._llm = llm
 
     async def run(
@@ -88,7 +88,16 @@ class TriageAgent(BaseAgent):
             )
 
             text = response.get("text", "")
-            return self._parse_response(text)
+            parsed = self._parse_response(text)
+
+            # Audit log the triage verdict
+            self._audit(
+                "triage_verdict",
+                f"severity={parsed['severity']}, verdict={parsed['verdict']}, summary={parsed.get('summary', 'N/A')}",
+                "complete",
+                metadata={"severity": parsed["severity"], "verdict": parsed["verdict"], "incident_id": incident.id},
+            )
+            return parsed
 
         finally:
             # Always revoke credential after use

@@ -38,8 +38,8 @@ class ValidatorAgent(BaseAgent):
     No tools - pure analysis of fix results.
     """
 
-    def __init__(self, vault: IVault, llm: Any, gateway: AIGateway):
-        super().__init__(vault, AgentRole.VALIDATOR, gateway)
+    def __init__(self, vault: IVault, llm: Any, gateway: AIGateway, audit_log=None):
+        super().__init__(vault, AgentRole.VALIDATOR, gateway, audit_log=audit_log)
         self._llm = llm
 
     async def run(self, incident: Incident) -> dict:

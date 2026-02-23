@@ -16,6 +16,7 @@ from backend.shared.models import (
     LogEvent, MemoryEntry, ToolCall,
 )
 from backend.orchestrator.graph import IncidentGraphBuilder, IncidentGraphState
+from backend.shared.audit_log import ImmutableAuditLog
 from backend.services.registry import ServiceRegistry
 
 logger = logging.getLogger(__name__)
@@ -41,12 +42,14 @@ class Orchestrator:
         tools: IToolExecutor,
         memory: IMemoryStore,
         circuit_breaker: CostCircuitBreaker,
+        audit_log: Optional[ImmutableAuditLog] = None,
     ):
         self._config = config
         self._llm = llm
         self._tools = tools
         self._memory = memory
         self._cb = circuit_breaker
+        self._audit_log = audit_log
         self._active_incidents: dict[str, Incident] = {}
         self._resolved_incidents: list[Incident] = []
 
