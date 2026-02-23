@@ -21,6 +21,7 @@ from backend.shared.vault import LocalVault, AgentRole
 from backend.shared.ai_gateway import AIGateway
 from backend.shared.audit_log import ImmutableAuditLog
 from backend.shared.agent_throttle import AgentThrottle
+from backend.shared.security import SecurityGuard as _SecurityGuardForSanitize
 from backend.shared.tool_registry import TrustedToolRegistry, create_default_registry
 from backend.memory.store import JSONMemoryStore
 from backend.mcp_tools.executor import MCPToolExecutor
@@ -136,9 +137,16 @@ async def get_incident_detail(incident_id: str):
 async def trigger_event(req: TriggerEventRequest):
     if not _orchestrator:
         raise HTTPException(503, "Not ready")
+
+    # Sanitize user input before creating the log event
+    sanitized_message = req.message
+    if _config:
+        guard = SecurityGuard(_config.security)
+        sanitized_message = guard.sanitize_input(req.message)
+
     event = LogEvent(
         source_file=req.source,
-        line_content=req.message,
+        line_content=sanitized_message,
         timestamp=datetime.now(timezone.utc),
         matched_pattern="manual",
     )
