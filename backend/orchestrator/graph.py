@@ -6,7 +6,9 @@ Uses LangGraph's StateGraph for ordered, deterministic state transitions:
   TRIAGE -> DIAGNOSIS -> REMEDIATION -> VERIFICATION -> RESOLVED/ESCALATED
 """
 
+import asyncio
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypedDict
 
@@ -526,6 +528,16 @@ class IncidentGraphBuilder:
                                       detail=incident.fix_applied or "No fix",
                                       metadata={"tools_used": tools_used, "loops": rem_loop + 1})
 
+                # Auto-commit the fix to git if apply_patch was used
+                if "apply_patch" in tools_used:
+                    incident.current_agent_action = "Committing fix to git..."
+                    commit_hash = await self._auto_commit_fix(incident)
+                    if commit_hash:
+                        incident.commit_id = commit_hash
+                        incident.log_activity(ActivityType.INFO, "remediation",
+                                              f"Fix committed to git: {commit_hash}",
+                                              metadata={"commit_id": commit_hash})
+
             incident.state = IncidentState.VERIFICATION
             incident.log_activity(ActivityType.PHASE_COMPLETE, "remediation", "Remediation complete")
             incident.current_agent_action = None
@@ -627,3 +639,48 @@ class IncidentGraphBuilder:
             response.get("input_tokens", 0),
             response.get("output_tokens", 0),
         )
+
+    async def _auto_commit_fix(self, incident: Incident) -> str | None:  # pragma: no cover
+        """
+        Auto-commit the fix to the monitored service's git repo using GitPython.
+        Returns the short commit hash, or None if the repo is not a git repo.
+        Only commits if .git already exists — does NOT initialize new repos.
+        """
+        from git import Repo, InvalidGitRepositoryError, Actor
+        project_root = self._config.security.project_root
+
+        try:
+            git_dir = os.path.join(project_root, ".git")
+            if not os.path.isdir(git_dir):
+                logger.info(f"Not a git repo ({project_root}) — skipping auto-commit")
+                return None
+
+            repo = Repo(project_root)
+
+            # Stage all changes
+            repo.git.add(A=True)
+
+            # Check if there are staged changes to commit
+            if not repo.index.diff("HEAD"):
+                logger.info("No staged changes to commit")
+                return None
+
+            # Build commit message
+            summary = (incident.root_cause or incident.symptom or "fix")[:72]
+            summary = summary.replace("\n", " ")
+            commit_msg = f"sentry-fix({incident.id}): {summary}"
+
+            # Commit with Sentry Bot author
+            author = Actor("Sentry Bot", "sentry@auto-heal")
+            repo.index.commit(commit_msg, author=author, committer=author)
+
+            commit_hash = repo.head.commit.hexsha[:8]
+            logger.info(f"Auto-committed fix for {incident.id}: {commit_hash}")
+            return commit_hash
+
+        except InvalidGitRepositoryError:
+            logger.info(f"Not a valid git repo ({project_root}) — skipping auto-commit")
+            return None
+        except Exception as e:
+            logger.warning(f"Auto-commit failed: {e}")
+            return None

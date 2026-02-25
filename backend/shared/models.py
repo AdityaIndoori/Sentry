@@ -95,6 +95,7 @@ class Incident:
     severity: IncidentSeverity = IncidentSeverity.MEDIUM
     root_cause: Optional[str] = None
     fix_applied: Optional[str] = None
+    commit_id: Optional[str] = None  # Git commit hash of the fix (if auto-committed)
     triage_result: Optional[str] = None
     log_events: list = field(default_factory=list)
     activity_log: list = field(default_factory=list)  # list[ActivityEntry]
@@ -143,6 +144,7 @@ class Incident:
             "severity": self.severity.value,
             "root_cause": self.root_cause,
             "fix_applied": self.fix_applied,
+            "commit_id": self.commit_id,
             "triage_result": self.triage_result,
             "log_events": serialized_log_events,
             "created_at": self.created_at.isoformat(),

@@ -617,6 +617,17 @@ function IncidentCard({ inc }) {
                 {inc.fix_applied}
               </InfoBlock>
             )}
+            {inc.commit_id && (
+              <InfoBlock icon="📝" title="Git Commit" color={c.accent}>
+                <span style={{
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: '13px', fontWeight: 700, color: c.accent,
+                  background: `${c.accent}15`, padding: '3px 10px',
+                  borderRadius: '6px', border: `1px solid ${c.accent}30`,
+                  display: 'inline-block',
+                }}>{inc.commit_id}</span>
+              </InfoBlock>
+            )}
             <InfoBlock icon="📊" title="Metrics" color={c.textDim}>
               <span>Retries: {inc.retry_count || 0} • Cost: ${(inc.cost_usd || 0).toFixed(4)} • Activities: {(inc.activity_log || []).length}</span>
             </InfoBlock>
