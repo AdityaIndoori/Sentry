@@ -46,6 +46,8 @@ sentry_memory.json
 STOP_SENTRY
 *.bak
 logs/
+watched/
+data/
 
 # OS
 .DS_Store
