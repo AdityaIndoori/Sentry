@@ -4,7 +4,10 @@ Provides REST endpoints for the frontend UI.
 """
 
 import asyncio
+import contextvars
 import logging
+import os
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -12,6 +15,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from backend.shared.circuit_breaker import CostCircuitBreaker
 from backend.shared.config import load_config, LLMProvider
@@ -31,6 +35,27 @@ from backend.watcher.log_watcher import LogWatcher
 
 logger = logging.getLogger(__name__)
 
+# ── Request ID tracking via ContextVar ────────────────────────────────────────
+_request_id_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
+
+
+class RequestIDFilter(logging.Filter):
+    """Injects the current request ID into every log record."""
+    def filter(self, record):
+        record.request_id = _request_id_ctx.get("-")
+        return True
+
+
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    """Generates a unique request ID, stores it in ContextVar, adds to response header."""
+    async def dispatch(self, request: Request, call_next):
+        request_id = uuid.uuid4().hex[:12]
+        _request_id_ctx.set(request_id)
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+
 # Global references set during lifespan
 _orchestrator: Orchestrator = None
 _watcher: LogWatcher = None
@@ -44,7 +69,52 @@ async def lifespan(app: FastAPI):  # pragma: no cover
     global _orchestrator, _watcher, _config
 
     _config = load_config()
-    logging.basicConfig(level=getattr(logging, _config.log_level))
+    log_level = getattr(logging, _config.log_level)
+    log_format = "%(asctime)s %(levelname)s [%(request_id)s] %(name)s:%(message)s"
+
+    # Install the RequestID filter and formatter on ALL loggers
+    rid_filter = RequestIDFilter()
+    formatter = logging.Formatter(log_format)
+
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(log_level)
+    root_logger.addFilter(rid_filter)
+
+    # If root has no handlers yet, add a console handler
+    if not root_logger.handlers:
+        console = logging.StreamHandler()
+        console.setLevel(log_level)
+        root_logger.addHandler(console)
+
+    # Apply our formatter + filter to ALL existing handlers on root
+    for handler in root_logger.handlers:
+        handler.setFormatter(formatter)
+        handler.addFilter(rid_filter)
+
+    # Also install filter + formatter on uvicorn loggers (they don't propagate)
+    for uv_logger_name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
+        uv_log = logging.getLogger(uv_logger_name)
+        uv_log.addFilter(rid_filter)
+        for handler in uv_log.handlers:
+            handler.setFormatter(formatter)
+            handler.addFilter(rid_filter)
+
+    # Add timestamped file handler if LOG_FILE_DIR is set
+    if _config.log_file_dir:
+        os.makedirs(_config.log_file_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        log_file = os.path.join(_config.log_file_dir, f"backend_{timestamp}.log")
+        file_handler = logging.FileHandler(log_file, encoding="utf-8")
+        file_handler.setLevel(log_level)
+        file_handler.setFormatter(formatter)
+        file_handler.addFilter(rid_filter)
+        # Attach to root logger (catches backend.* loggers)
+        logging.getLogger().addHandler(file_handler)
+        # Attach to uvicorn loggers (they don't propagate to root by default)
+        for uv_logger_name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
+            logging.getLogger(uv_logger_name).addHandler(file_handler)
+        logger.info(f"Logging to file: {log_file}")
 
     security = SecurityGuard(_config.security)
     memory = JSONMemoryStore(_config.memory)
@@ -76,8 +146,10 @@ app.add_middleware(
     allow_origins=["http://localhost:3000", "http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["GET", "POST"],
-    allow_headers=["*"],
+    allow_headers=["*", "X-Request-ID"],
+    expose_headers=["X-Request-ID"],
 )
+app.add_middleware(RequestIDMiddleware)
 
 
 # --- Pydantic models for request validation ---

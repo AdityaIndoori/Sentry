@@ -104,6 +104,7 @@ class AppConfig:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     audit_log_path: str = "/app/data/audit.jsonl"
     service_source_path: str = "/app/workspace"
+    log_file_dir: str = ""  # Directory for timestamped log files; empty = no file logging
     api_host: str = "0.0.0.0"
     api_port: int = 8000
     log_level: str = "INFO"
@@ -169,6 +170,7 @@ def load_config() -> AppConfig:
         watcher=watcher,
         memory=memory,
         service_source_path=os.environ.get("SERVICE_SOURCE_PATH", "/app/workspace"),
+        log_file_dir=os.environ.get("LOG_FILE_DIR", ""),
         api_host=os.environ.get("API_HOST", "0.0.0.0"),
         api_port=int(os.environ.get("API_PORT", "8000")),
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
