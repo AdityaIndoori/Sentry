@@ -206,11 +206,11 @@ class TestTriageNode:
 
 class TestDiagnosisNode:
     @pytest.mark.asyncio
-    async def test_diagnosis_text_response_sets_root_cause(self, mock_llm, mock_tools, mock_memory, circuit_breaker):
+    async def test_diagnosis_text_response_sets_root_cause(self, mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps):
         mock_llm.analyze.return_value = _make_llm_response(
             "ROOT CAUSE: Database port is 5433 instead of 5432\nRECOMMENDED FIX: Change port"
         )
-        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker)
+        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps=zero_trust_deps)
         inc = Incident(id="INC-D1", symptom="Connection refused", severity=IncidentSeverity.HIGH)
         state = _make_state(incident=inc)
         result = await builder._diagnosis_node(state)
@@ -218,7 +218,7 @@ class TestDiagnosisNode:
         assert result["incident"].state == IncidentState.REMEDIATION
 
     @pytest.mark.asyncio
-    async def test_diagnosis_tool_loop(self, mock_llm, mock_tools, mock_memory, circuit_breaker):
+    async def test_diagnosis_tool_loop(self, mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps):
         # First call: request a tool. Second call: give final answer.
         from backend.shared.models import ToolResult
         mock_llm.analyze.side_effect = [
@@ -228,7 +228,7 @@ class TestDiagnosisNode:
         mock_tools.execute.return_value = ToolResult(
             tool_name="read_file", success=True, output="DB_PORT = 5433"
         )
-        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker)
+        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps=zero_trust_deps)
         inc = Incident(id="INC-D2", symptom="error", severity=IncidentSeverity.HIGH)
         state = _make_state(incident=inc)
         result = await builder._diagnosis_node(state)
@@ -236,7 +236,7 @@ class TestDiagnosisNode:
         mock_tools.execute.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_diagnosis_audit_mode_forces_summary(self, mock_llm, mock_tools, mock_memory, circuit_breaker):
+    async def test_diagnosis_audit_mode_forces_summary(self, mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps):
         # In AUDIT mode, after 2 tool loops it should force a summary
         mock_llm.analyze.side_effect = [
             _make_llm_response(tool_calls=[{"name": "read_file", "arguments": {"path": "a.py"}}]),
@@ -245,33 +245,33 @@ class TestDiagnosisNode:
         ]
         from backend.shared.models import ToolResult
         mock_tools.execute.return_value = ToolResult(tool_name="read_file", success=True, output="content")
-        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker, mode=SentryMode.AUDIT)
+        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker, mode=SentryMode.AUDIT, zero_trust_deps=zero_trust_deps)
         inc = Incident(id="INC-D3", symptom="error", severity=IncidentSeverity.MEDIUM)
         state = _make_state(incident=inc)
         result = await builder._diagnosis_node(state)
         assert result["incident"].state == IncidentState.REMEDIATION
 
     @pytest.mark.asyncio
-    async def test_diagnosis_circuit_breaker_tripped(self, mock_llm, mock_tools, mock_memory):
+    async def test_diagnosis_circuit_breaker_tripped(self, mock_llm, mock_tools, mock_memory, zero_trust_deps):
         cb = CostCircuitBreaker(max_cost_usd=0.0, window_minutes=10)
         cb._tripped = True
-        builder = _make_builder(mock_llm, mock_tools, mock_memory, cb)
+        builder = _make_builder(mock_llm, mock_tools, mock_memory, cb, zero_trust_deps=zero_trust_deps)
         inc = Incident(id="INC-D4", symptom="error", severity=IncidentSeverity.HIGH)
         state = _make_state(incident=inc)
         result = await builder._diagnosis_node(state)
         assert result["incident"].state == IncidentState.ESCALATED
 
     @pytest.mark.asyncio
-    async def test_diagnosis_exception_escalates(self, mock_llm, mock_tools, mock_memory, circuit_breaker):
+    async def test_diagnosis_exception_escalates(self, mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps):
         mock_llm.analyze.side_effect = RuntimeError("LLM crashed")
-        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker)
+        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps=zero_trust_deps)
         inc = Incident(id="INC-D5", symptom="error", severity=IncidentSeverity.HIGH)
         state = _make_state(incident=inc)
         result = await builder._diagnosis_node(state)
         assert result["incident"].state == IncidentState.ESCALATED
 
     @pytest.mark.asyncio
-    async def test_diagnosis_exhausted_loops_forces_summary(self, mock_llm, mock_tools, mock_memory, circuit_breaker):
+    async def test_diagnosis_exhausted_loops_forces_summary(self, mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps):
         # Always return tool calls — exhaust all loops
         from backend.shared.models import ToolResult
         mock_llm.analyze.return_value = _make_llm_response(
@@ -289,7 +289,7 @@ class TestDiagnosisNode:
             return _make_llm_response(tool_calls=[{"name": "read_file", "arguments": {"path": "a.py"}}])
 
         mock_llm.analyze.side_effect = analyze_with_summary
-        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker)
+        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps=zero_trust_deps)
         inc = Incident(id="INC-D6", symptom="error", severity=IncidentSeverity.HIGH)
         state = _make_state(incident=inc)
         result = await builder._diagnosis_node(state)
@@ -302,26 +302,28 @@ class TestDiagnosisNode:
 
 class TestRemediationNode:
     @pytest.mark.asyncio
-    async def test_remediation_audit_mode_no_tools(self, mock_llm, mock_tools, mock_memory, circuit_breaker):
+    async def test_remediation_audit_mode_no_tools(self, mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps):
         mock_llm.analyze.return_value = _make_llm_response(
             "FIX PROPOSED: Change port from 5433 to 5432 in config/db.py"
         )
-        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker, mode=SentryMode.AUDIT)
+        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker, mode=SentryMode.AUDIT, zero_trust_deps=zero_trust_deps)
         inc = Incident(id="INC-R1", symptom="error", root_cause="Wrong port")
         state = _make_state(incident=inc)
         result = await builder._remediation_node(state)
-        assert "[AUDIT]" in result["incident"].fix_applied
+        # SurgeonAgent returns fix_description directly; graph applies it
+        assert result["incident"].fix_applied is not None
+        assert len(result["incident"].fix_applied) > 0
         assert result["incident"].state == IncidentState.VERIFICATION
 
     @pytest.mark.asyncio
-    async def test_remediation_active_mode_with_tools(self, mock_llm, mock_tools, mock_memory, circuit_breaker):
+    async def test_remediation_active_mode_with_tools(self, mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps):
         from backend.shared.models import ToolResult
         mock_llm.analyze.side_effect = [
             _make_llm_response(tool_calls=[{"name": "apply_patch", "arguments": {"file_path": "db.py", "diff": "patch"}}]),
             _make_llm_response("FIX APPLIED: Patched config"),
         ]
         mock_tools.execute.return_value = ToolResult(tool_name="apply_patch", success=True, output="Patch applied")
-        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker, mode=SentryMode.ACTIVE)
+        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker, mode=SentryMode.ACTIVE, zero_trust_deps=zero_trust_deps)
         inc = Incident(id="INC-R2", symptom="error", root_cause="Wrong port")
         state = _make_state(incident=inc)
         result = await builder._remediation_node(state)
@@ -329,27 +331,27 @@ class TestRemediationNode:
         mock_tools.execute.assert_awaited()
 
     @pytest.mark.asyncio
-    async def test_remediation_active_no_tool_calls(self, mock_llm, mock_tools, mock_memory, circuit_breaker):
+    async def test_remediation_active_no_tool_calls(self, mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps):
         mock_llm.analyze.return_value = _make_llm_response("FIX PROPOSED: Manual fix needed")
-        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker, mode=SentryMode.ACTIVE)
+        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker, mode=SentryMode.ACTIVE, zero_trust_deps=zero_trust_deps)
         inc = Incident(id="INC-R3", symptom="error", root_cause="Complex issue")
         state = _make_state(incident=inc)
         result = await builder._remediation_node(state)
         assert result["incident"].state == IncidentState.VERIFICATION
 
     @pytest.mark.asyncio
-    async def test_remediation_exception_escalates(self, mock_llm, mock_tools, mock_memory, circuit_breaker):
+    async def test_remediation_exception_escalates(self, mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps):
         mock_llm.analyze.side_effect = RuntimeError("LLM crashed")
-        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker)
+        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps=zero_trust_deps)
         inc = Incident(id="INC-R4", symptom="error", root_cause="issue")
         state = _make_state(incident=inc)
         result = await builder._remediation_node(state)
         assert result["incident"].state == IncidentState.ESCALATED
 
     @pytest.mark.asyncio
-    async def test_remediation_includes_tool_results_in_context(self, mock_llm, mock_tools, mock_memory, circuit_breaker):
+    async def test_remediation_includes_tool_results_in_context(self, mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps):
         mock_llm.analyze.return_value = _make_llm_response("FIX PROPOSED: Update config")
-        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker)
+        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps=zero_trust_deps)
         inc = Incident(id="INC-R5", symptom="error", root_cause="Bad config")
         state = _make_state(incident=inc, tool_results=["read_file: DB_PORT=5433"])
         result = await builder._remediation_node(state)
@@ -362,9 +364,9 @@ class TestRemediationNode:
 
 class TestVerificationNode:
     @pytest.mark.asyncio
-    async def test_verification_resolved(self, mock_llm, mock_tools, mock_memory, circuit_breaker):
+    async def test_verification_resolved(self, mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps):
         mock_llm.analyze.return_value = _make_llm_response("The issue is fixed and resolved.")
-        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker)
+        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps=zero_trust_deps)
         inc = Incident(id="INC-V1", symptom="error", fix_applied="patched")
         state = _make_state(incident=inc)
         result = await builder._verification_node(state)
@@ -372,9 +374,9 @@ class TestVerificationNode:
         assert result["incident"].resolved_at is not None
 
     @pytest.mark.asyncio
-    async def test_verification_not_resolved_retries(self, mock_llm, mock_tools, mock_memory, circuit_breaker):
+    async def test_verification_not_resolved_retries(self, mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps):
         mock_llm.analyze.return_value = _make_llm_response("The issue is not fixed, still broken.")
-        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker)
+        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps=zero_trust_deps)
         inc = Incident(id="INC-V2", symptom="error", fix_applied="attempted fix", retry_count=0)
         state = _make_state(incident=inc)
         result = await builder._verification_node(state)
@@ -382,36 +384,36 @@ class TestVerificationNode:
         assert result["incident"].retry_count == 1
 
     @pytest.mark.asyncio
-    async def test_verification_max_retries_escalates(self, mock_llm, mock_tools, mock_memory, circuit_breaker):
+    async def test_verification_max_retries_escalates(self, mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps):
         mock_llm.analyze.return_value = _make_llm_response("Still broken, not fixed.")
-        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker)
+        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps=zero_trust_deps)
         inc = Incident(id="INC-V3", symptom="error", fix_applied="fix", retry_count=2)
         state = _make_state(incident=inc)
         result = await builder._verification_node(state)
         assert result["incident"].state == IncidentState.ESCALATED
 
     @pytest.mark.asyncio
-    async def test_verification_audit_mode_resolves(self, mock_llm, mock_tools, mock_memory, circuit_breaker):
+    async def test_verification_audit_mode_resolves(self, mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps):
         mock_llm.analyze.return_value = _make_llm_response("resolved")
-        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker, mode=SentryMode.AUDIT)
+        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker, mode=SentryMode.AUDIT, zero_trust_deps=zero_trust_deps)
         inc = Incident(id="INC-V4", symptom="error", fix_applied="[AUDIT] plan")
         state = _make_state(incident=inc)
         result = await builder._verification_node(state)
         assert result["incident"].state == IncidentState.RESOLVED
 
     @pytest.mark.asyncio
-    async def test_verification_exception_escalates(self, mock_llm, mock_tools, mock_memory, circuit_breaker):
+    async def test_verification_exception_escalates(self, mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps):
         mock_llm.analyze.side_effect = RuntimeError("LLM crashed")
-        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker)
+        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps=zero_trust_deps)
         inc = Incident(id="INC-V5", symptom="error", fix_applied="fix")
         state = _make_state(incident=inc)
         result = await builder._verification_node(state)
         assert result["incident"].state == IncidentState.ESCALATED
 
     @pytest.mark.asyncio
-    async def test_verification_logs_activity(self, mock_llm, mock_tools, mock_memory, circuit_breaker):
+    async def test_verification_logs_activity(self, mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps):
         mock_llm.analyze.return_value = _make_llm_response("fixed and resolved")
-        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker)
+        builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps=zero_trust_deps)
         inc = Incident(id="INC-V6", symptom="error", fix_applied="fix")
         state = _make_state(incident=inc)
         result = await builder._verification_node(state)

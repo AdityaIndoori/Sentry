@@ -326,123 +326,65 @@ class IncidentGraphBuilder:
             return {**state, "incident": incident, "error": str(e)}
 
     async def _diagnosis_node(self, state: IncidentGraphState) -> IncidentGraphState:
-        """Phase 2: Deep analysis with tool loop (high effort)."""
+        """Phase 2: Deep analysis with tool loop (high effort).
+        
+        Delegates to DetectiveAgent which provides:
+        - NHI identity + JIT credentials
+        - Tool registry role-based ACL (read-only tools only)
+        - Per-agent throttle (max actions/minute)
+        - AI Gateway prompt injection + PII scanning
+        - Immutable audit trail
+        """
         incident = state["incident"]
         incident.state = IncidentState.DIAGNOSIS
         incident.current_agent_action = "Starting deep analysis..."
         incident.log_activity(ActivityType.PHASE_START, "diagnosis", "Diagnosis phase started",
                               detail="Deep root-cause analysis using high-effort reasoning with tool access")
-        tool_results = state.get("tool_results", [])
-        is_audit = self._config.security.mode == SentryMode.AUDIT
 
         try:
-            # IMPORTANT: Diagnosis agent gets READ-ONLY tools only.
-            # It must investigate and identify root cause but NEVER modify
-            # system state. Only the Remediation agent gets apply_patch
-            # and restart_service.
-            tools = self._tools.get_read_only_tool_definitions()
+            # Circuit breaker check stays in graph (orchestration logic)
+            if self._cb.is_tripped:
+                incident.log_activity(ActivityType.ERROR, "diagnosis", "Circuit breaker tripped — aborting")
+                incident.state = IncidentState.ESCALATED
+                incident.current_agent_action = None
+                return {**state, "incident": incident, "error": "circuit_breaker_tripped"}
+
             service_context = state.get("service_context", "")
-            prompt = _build_diagnosis_prompt(incident, self._config, service_context)
-            max_loops = self._config.security.max_retries
 
-            for loop_idx in range(max_loops):
-                if self._cb.is_tripped:
-                    incident.log_activity(ActivityType.ERROR, "diagnosis", "Circuit breaker tripped — aborting")
-                    incident.state = IncidentState.ESCALATED
-                    incident.current_agent_action = None
-                    return {**state, "incident": incident, "error": "circuit_breaker_tripped"}
-
-                incident.current_agent_action = f"Calling LLM (effort: high, loop {loop_idx+1}/{max_loops})..."
-                incident.log_activity(ActivityType.LLM_CALL, "diagnosis",
-                                      f"LLM call #{loop_idx+1} (effort: high)",
-                                      metadata={"effort": "high", "loop": loop_idx+1})
-
-                response = await self._llm.analyze(prompt, effort="high", tools=tools)
-                self._track_cost(response)
-
-                tool_calls = response.get("tool_calls", [])
-                if tool_calls:
-                    for tc in tool_calls:
-                        args_summary = ", ".join(f"{k}={str(v)[:50]}" for k, v in tc.get("arguments", {}).items())
-                        incident.current_agent_action = f"Running tool: {tc['name']}({args_summary})..."
-                        incident.log_activity(ActivityType.TOOL_CALL, "diagnosis",
-                                              f"Calling {tc['name']}",
-                                              detail=args_summary,
-                                              metadata={"tool": tc["name"], "args": {k: str(v)[:100] for k, v in tc.get("arguments", {}).items()}})
-
-                        call = ToolCall(tool_name=tc["name"], arguments=tc.get("arguments", {}))
-                        result = await self._tools.execute(call)
-                        result_text = result.output or result.error or ""
-                        # Bug fix #11: Truncate tool results appended to prompt to prevent
-                        # unbounded growth. Each result is capped, and we cap total additions.
-                        truncated_result = result_text[:2000]
-                        prompt += f"\n\nTool {tc['name']} result: {truncated_result}"
-                        tool_results.append(f"{tc['name']}: {result_text[:200]}")
-
-                        # Cap total prompt size to prevent token explosion
-                        if len(prompt) > 50000:
-                            prompt = prompt[:25000] + "\n\n[... earlier context truncated ...]\n\n" + prompt[-20000:]
-
-                        incident.log_activity(ActivityType.TOOL_RESULT, "diagnosis",
-                                              f"{tc['name']} → {'✓' if result.success else '✗'}",
-                                              detail=result_text[:300],
-                                              metadata={"success": result.success, "audit_only": result.audit_only})
-
-                    if is_audit and loop_idx >= 1:
-                        incident.log_activity(ActivityType.INFO, "diagnosis",
-                                              "AUDIT mode: forcing summary after tool loops")
-                        break
-                    continue
-
-                # No tool calls - LLM gave text response
-                text = response.get("text", "")
-                if text:
-                    diagnosis = DiagnosisResult.parse_safe(text)
-                    incident.root_cause = diagnosis.root_cause
-                    incident.state = IncidentState.REMEDIATION
-                    incident.log_activity(ActivityType.DECISION, "diagnosis",
-                                          "Root cause identified",
-                                          detail=diagnosis.root_cause,
-                                          metadata={"recommended_fix": diagnosis.recommended_fix})
-                    incident.log_activity(ActivityType.PHASE_COMPLETE, "diagnosis", "Diagnosis complete")
-                    incident.current_agent_action = None
-                    logger.info(f"Diagnosis for {incident.id}: {diagnosis.root_cause[:150]}")
-                    return {
-                        **state,
-                        "incident": incident,
-                        "diagnosis": diagnosis.model_dump(),
-                        "tool_results": tool_results,
-                    }
-
-            # Exhausted loops - ask for best-effort summary
-            incident.current_agent_action = "Synthesizing diagnosis from gathered evidence..."
-            incident.log_activity(ActivityType.LLM_CALL, "diagnosis",
-                                  "Requesting final diagnosis summary",
-                                  metadata={"effort": "high", "reason": "max_loops_reached"})
-
-            summary_prompt = _build_diagnosis_summary_prompt(incident, tool_results, is_audit)
-            response = await self._llm.analyze(summary_prompt, effort="high")
-            self._track_cost(response)
-
-            text = response.get("text", "")
-            diagnosis = DiagnosisResult.parse_safe(text) if text else DiagnosisResult(
-                root_cause="Unable to determine root cause",
-                recommended_fix="Manual investigation required",
+            # ── Delegate to DetectiveAgent (Zero Trust secured) ──
+            incident.current_agent_action = "Calling DetectiveAgent (secured)..."
+            agent = DetectiveAgent(
+                vault=self._vault, llm=self._llm, tools=self._tools,
+                registry=self._registry, gateway=self._gateway,
+                throttle=self._throttle, audit_log=self._audit_log,
             )
-            incident.root_cause = diagnosis.root_cause
+            result = await agent.run(incident, service_context=service_context)
+            self._track_cost(result)
+
+            # Apply result to incident
+            incident.root_cause = result.get("root_cause", "Unknown")
+            tool_results = result.get("tool_results", [])
+            tool_result_summaries = []
+            for tr in tool_results:
+                if isinstance(tr, dict):
+                    tool_result_summaries.append(f"{tr.get('tool','?')}: {tr.get('output','')[:200]}")
+                else:
+                    tool_result_summaries.append(str(tr)[:200])
+
             incident.state = IncidentState.REMEDIATION
             incident.log_activity(ActivityType.DECISION, "diagnosis",
-                                  "Root cause identified (from summary)",
-                                  detail=diagnosis.root_cause)
+                                  "Root cause identified",
+                                  detail=incident.root_cause,
+                                  metadata={"recommended_fix": result.get("recommended_fix", "")})
             incident.log_activity(ActivityType.PHASE_COMPLETE, "diagnosis", "Diagnosis complete")
             incident.current_agent_action = None
-            logger.info(f"Diagnosis (summary) for {incident.id}: {diagnosis.root_cause[:150]}")
+            logger.info(f"Diagnosis for {incident.id}: {incident.root_cause[:150]}")
 
             return {
                 **state,
                 "incident": incident,
-                "diagnosis": diagnosis.model_dump(),
-                "tool_results": tool_results,
+                "diagnosis": result,
+                "tool_results": tool_result_summaries,
             }
         except Exception as e:
             logger.error(f"Diagnosis error for {incident.id}: {e}")
@@ -452,99 +394,53 @@ class IncidentGraphBuilder:
             return {**state, "incident": incident, "error": str(e)}
 
     async def _remediation_node(self, state: IncidentGraphState) -> IncidentGraphState:
-        """Phase 3: Apply or propose fix (medium effort)."""
+        """Phase 3: Apply or propose fix (medium effort).
+        
+        Delegates to SurgeonAgent which provides:
+        - NHI identity + JIT credentials
+        - Tool registry role-based ACL (active tools: apply_patch, restart_service)
+        - Per-agent throttle
+        - AI Gateway scanning + audit trail
+        """
         incident = state["incident"]
         incident.state = IncidentState.REMEDIATION
         incident.current_agent_action = "Preparing remediation plan..."
         incident.log_activity(ActivityType.PHASE_START, "remediation", "Remediation phase started",
                               detail=f"Root cause: {incident.root_cause or 'N/A'}")
-        is_audit = self._config.security.mode == SentryMode.AUDIT
 
         try:
             tool_results = state.get("tool_results", [])
-            prompt = _build_remediation_prompt(incident, is_audit, tool_results=tool_results)
-            tools_used = []
 
-            if is_audit:
-                incident.current_agent_action = "Generating fix proposal (AUDIT mode)..."
-                incident.log_activity(ActivityType.LLM_CALL, "remediation",
-                                      "Requesting fix proposal (AUDIT — no execution)",
-                                      metadata={"effort": "medium", "audit": True})
-                response = await self._llm.analyze(prompt, effort="medium")
-                self._track_cost(response)
-                text = response.get("text", "")
-                remediation = RemediationResult.parse_safe(text)
-                incident.fix_applied = f"[AUDIT] {remediation.fix_description}"
-                incident.log_activity(ActivityType.DECISION, "remediation",
-                                      "Fix proposed (AUDIT — not executed)",
-                                      detail=remediation.fix_description)
-            else:
-                # Multi-step tool loop: Surgeon reads file, patches, restarts.
-                # Only expose read_file + active tools to prevent the LLM from
-                # wasting loops on grep_search/fetch_docs investigation.
-                tools = self._tools.get_remediation_tool_definitions()
-                max_remediation_loops = 4
-                remediation_prompt = prompt
+            # ── Delegate to SurgeonAgent (Zero Trust secured) ──
+            incident.current_agent_action = "Calling SurgeonAgent (secured)..."
+            agent = SurgeonAgent(
+                vault=self._vault, llm=self._llm, tools=self._tools,
+                registry=self._registry, gateway=self._gateway,
+                throttle=self._throttle, config=self._config,
+                audit_log=self._audit_log,
+            )
+            result = await agent.run(incident, tool_results_context=tool_results)
+            self._track_cost(result)
 
-                for rem_loop in range(max_remediation_loops):
-                    incident.current_agent_action = f"Applying fix (step {rem_loop+1}/{max_remediation_loops})..."
-                    incident.log_activity(ActivityType.LLM_CALL, "remediation",
-                                          f"Requesting fix with tool access (step {rem_loop+1})",
-                                          metadata={"effort": "medium", "loop": rem_loop+1})
+            # Apply result to incident
+            incident.fix_applied = result.get("fix_description", "No fix")
+            tools_used = result.get("tools_used", [])
 
-                    response = await self._llm.analyze(remediation_prompt, effort="medium", tools=tools)
-                    self._track_cost(response)
-
-                    tool_calls = response.get("tool_calls", [])
-                    if not tool_calls:
-                        # No more tool calls — LLM provided a text response
-                        break
-
-                    for tc in tool_calls:
-                        args_summary = ", ".join(f"{k}={str(v)[:40]}" for k, v in tc.get("arguments", {}).items())
-                        incident.log_activity(ActivityType.TOOL_CALL, "remediation",
-                                              f"Applying: {tc['name']}",
-                                              detail=args_summary,
-                                              metadata={"tool": tc["name"]})
-                        call = ToolCall(tool_name=tc["name"], arguments=tc.get("arguments", {}))
-                        result = await self._tools.execute(call)
-                        tools_used.append(tc["name"])
-                        result_text = result.output or result.error or ""
-                        # Feed tool results back into the prompt for the next loop
-                        remediation_prompt += f"\n\nTool {tc['name']} result: {result_text[:2000]}"
-                        incident.log_activity(ActivityType.TOOL_RESULT, "remediation",
-                                              f"{tc['name']} → {'✓' if result.success else '✗'}",
-                                              detail=result_text[:300],
-                                              metadata={"success": result.success})
-                        if result.success and tc["name"] == "apply_patch":
-                            incident.fix_applied = f"{tc['name']}: {result_text[:200]}"
-                        elif result.success and tc["name"] == "restart_service":
-                            incident.fix_applied = f"{tc['name']}: {result_text[:200]}"
-
-                    # Cap prompt size
-                    if len(remediation_prompt) > 50000:
-                        remediation_prompt = remediation_prompt[:25000] + "\n\n[...truncated...]\n\n" + remediation_prompt[-20000:]
-
-                text = response.get("text", "")
-                remediation = RemediationResult.parse_safe(text, tools_used)
-                if not incident.fix_applied:
-                    incident.fix_applied = remediation.fix_description
-                incident.log_activity(ActivityType.DECISION, "remediation",
-                                      "Fix applied" if any(t in tools_used for t in ("apply_patch", "restart_service")) else "Fix described",
-                                      detail=incident.fix_applied or "No fix",
-                                      metadata={"tools_used": tools_used, "loops": rem_loop + 1})
-
-                # Auto-commit the fix to git if apply_patch was used
-                if "apply_patch" in tools_used:
-                    incident.current_agent_action = "Committing fix to git..."
-                    commit_hash = await self._auto_commit_fix(incident)
-                    if commit_hash:
-                        incident.commit_id = commit_hash
-                        incident.log_activity(ActivityType.INFO, "remediation",
-                                              f"Fix committed to git: {commit_hash}",
-                                              metadata={"commit_id": commit_hash})
+            # Git auto-commit stays in graph (orchestration logic, not agent logic)
+            if "apply_patch" in tools_used:
+                incident.current_agent_action = "Committing fix to git..."
+                commit_hash = await self._auto_commit_fix(incident)
+                if commit_hash:
+                    incident.commit_id = commit_hash
+                    incident.log_activity(ActivityType.INFO, "remediation",
+                                          f"Fix committed to git: {commit_hash}",
+                                          metadata={"commit_id": commit_hash})
 
             incident.state = IncidentState.VERIFICATION
+            incident.log_activity(ActivityType.DECISION, "remediation",
+                                  "Fix applied" if result.get("fix_applied") else "Fix proposed",
+                                  detail=incident.fix_applied or "No fix",
+                                  metadata={"tools_used": tools_used})
             incident.log_activity(ActivityType.PHASE_COMPLETE, "remediation", "Remediation complete")
             incident.current_agent_action = None
             logger.info(f"Remediation for {incident.id}: {incident.fix_applied[:150] if incident.fix_applied else 'none'}")
@@ -552,7 +448,7 @@ class IncidentGraphBuilder:
             return {
                 **state,
                 "incident": incident,
-                "remediation": remediation.model_dump(),
+                "remediation": result,
             }
         except Exception as e:
             logger.error(f"Remediation error for {incident.id}: {e}")
@@ -562,32 +458,38 @@ class IncidentGraphBuilder:
             return {**state, "incident": incident, "error": str(e)}
 
     async def _verification_node(self, state: IncidentGraphState) -> IncidentGraphState:
-        """Phase 4: Verify the fix (disabled thinking for determinism)."""
+        """Phase 4: Verify the fix (disabled thinking for determinism).
+        
+        Delegates to ValidatorAgent which provides:
+        - NHI identity + JIT credentials
+        - AI Gateway scanning + audit trail
+        """
         incident = state["incident"]
         incident.state = IncidentState.VERIFICATION
         incident.current_agent_action = "Verifying fix..."
         incident.log_activity(ActivityType.PHASE_START, "verification", "Verification phase started",
                               detail=f"Checking if fix resolved the issue")
-        is_audit = self._config.security.mode == SentryMode.AUDIT
 
         try:
-            incident.log_activity(ActivityType.LLM_CALL, "verification",
-                                  "Calling LLM for verification (deterministic)",
-                                  metadata={"effort": "disabled"})
-            prompt = _build_verify_prompt(incident, is_audit)
-            response = await self._llm.analyze(prompt, effort="disabled")
-            self._track_cost(response)
+            # ── Delegate to ValidatorAgent (Zero Trust secured) ──
+            incident.current_agent_action = "Calling ValidatorAgent (secured)..."
+            agent = ValidatorAgent(
+                vault=self._vault, llm=self._llm,
+                gateway=self._gateway, audit_log=self._audit_log,
+            )
+            result = await agent.run(incident)
+            self._track_cost(result)
 
-            text = response.get("text", "")
-            verification = VerificationResult.parse_safe(text)
+            resolved = result.get("resolved", False)
+            reason = result.get("reason", "")
 
-            if verification.resolved:
+            if resolved:
                 incident.state = IncidentState.RESOLVED
                 from datetime import datetime, timezone
                 incident.resolved_at = datetime.now(timezone.utc)
                 incident.log_activity(ActivityType.DECISION, "verification",
                                       "✅ Incident RESOLVED",
-                                      detail=verification.reason)
+                                      detail=reason)
             else:
                 incident.retry_count += 1
                 if incident.retry_count >= self._config.security.max_retries:
@@ -600,20 +502,20 @@ class IncidentGraphBuilder:
                     incident.state = IncidentState.DIAGNOSIS
                     incident.log_activity(ActivityType.DECISION, "verification",
                                           f"Fix not verified — retrying (attempt {incident.retry_count})",
-                                          detail=verification.reason,
+                                          detail=reason,
                                           metadata={"retry_count": incident.retry_count})
 
             incident.log_activity(ActivityType.PHASE_COMPLETE, "verification", "Verification complete",
-                                  metadata={"resolved": verification.resolved})
+                                  metadata={"resolved": resolved})
             incident.current_agent_action = None
             logger.info(
                 f"Verification for {incident.id}: "
-                f"resolved={verification.resolved}, state={incident.state.value}"
+                f"resolved={resolved}, state={incident.state.value}"
             )
             return {
                 **state,
                 "incident": incident,
-                "verification": verification.model_dump(),
+                "verification": result,
             }
         except Exception as e:
             logger.error(f"Verification error for {incident.id}: {e}")
