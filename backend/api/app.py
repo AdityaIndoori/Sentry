@@ -63,6 +63,8 @@ _config = None
 _vault = None
 _gateway = None
 _audit_log = None
+_throttle = None
+_registry = None
 _watcher_task: object = None  # asyncio.Task for the watcher->orchestrator loop
 
 
@@ -119,7 +121,7 @@ async def lifespan(app: FastAPI):  # pragma: no cover
             logging.getLogger(uv_logger_name).addHandler(file_handler)
         logger.info(f"Logging to file: {log_file}")
 
-    global _vault, _gateway, _audit_log
+    global _vault, _gateway, _audit_log, _throttle, _registry
 
     security = SecurityGuard(_config.security)
     memory = JSONMemoryStore(_config.memory)
@@ -128,8 +130,8 @@ async def lifespan(app: FastAPI):  # pragma: no cover
     _vault = LocalVault()
     _gateway = AIGateway()
     _audit_log = ImmutableAuditLog(_config.audit_log_path)
-    throttle = AgentThrottle(max_actions_per_minute=5)
-    registry = create_default_registry()
+    _throttle = AgentThrottle(max_actions_per_minute=5)
+    _registry = create_default_registry()
 
     # Pass audit_log to ToolExecutor so tool executions are logged
     tools = ToolExecutor(security, _config.security.project_root, audit_log=_audit_log)
@@ -143,8 +145,8 @@ async def lifespan(app: FastAPI):  # pragma: no cover
         audit_log=_audit_log,
         vault=_vault,
         gateway=_gateway,
-        throttle=throttle,
-        registry=registry,
+        throttle=_throttle,
+        registry=_registry,
     )
     _watcher = LogWatcher(_config.watcher)
 
@@ -363,8 +365,8 @@ async def get_security_status():
             "vault": "active" if _vault and not _vault.is_killed else "inactive",
             "ai_gateway": "active" if _gateway else "inactive",
             "audit_log": "active" if _audit_log else "inactive",
-            "agent_throttle": "active",
-            "tool_registry": "active",
+            "agent_throttle": "active" if _throttle else "inactive",
+            "tool_registry": "active" if _registry else "inactive",
         },
         "mode": _config.security.mode.value,
         "stop_file_active": stop_file_exists,

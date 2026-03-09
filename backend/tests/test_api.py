@@ -412,7 +412,9 @@ class TestSecurityEndpoint:
              patch("backend.api.app._orchestrator", orch), \
              patch("backend.api.app._vault", mock_vault), \
              patch("backend.api.app._gateway", MagicMock()), \
-             patch("backend.api.app._audit_log", MagicMock()):
+             patch("backend.api.app._audit_log", MagicMock()), \
+             patch("backend.api.app._throttle", MagicMock()), \
+             patch("backend.api.app._registry", MagicMock()):
             transport = ASGITransport(app=app)
             async with AsyncClient(transport=transport, base_url="http://test") as client:
                 resp = await client.get("/api/security")
