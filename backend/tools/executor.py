@@ -20,6 +20,8 @@ from backend.shared.interfaces import IToolExecutor
 from backend.shared.models import ToolCall, ToolCategory, ToolResult
 from backend.shared.security import SecurityGuard
 from backend.shared.audit_log import ImmutableAuditLog
+from backend.shared.tool_registry import TrustedToolRegistry
+from backend.shared.vault import AgentRole
 
 from .active_tools import RunDiagnosticsTool
 from .patch_tool import ApplyPatchTool
@@ -49,11 +51,20 @@ def _is_tool_transient(error_str: str) -> bool:
 
 
 class ToolExecutor(IToolExecutor):
-    """Routes tool calls to implementations with security checks."""
+    """Routes tool calls to implementations with security checks.
+    
+    Defense-in-depth: If a TrustedToolRegistry is provided, the executor
+    enforces role-based tool ACL at execution time. This is a safety net —
+    even if an agent bypasses its own registry check, the executor blocks
+    unauthorized tool access.
+    """
 
-    def __init__(self, security: SecurityGuard, project_root: str, audit_log: Optional[ImmutableAuditLog] = None):
+    def __init__(self, security: SecurityGuard, project_root: str,
+                 audit_log: Optional[ImmutableAuditLog] = None,
+                 registry: Optional[TrustedToolRegistry] = None):
         self._security = security
         self._audit_log = audit_log
+        self._registry = registry
         self._rate_limiter = RateLimiter()
 
         # Initialize tools
@@ -87,7 +98,7 @@ class ToolExecutor(IToolExecutor):
                 metadata=metadata,
             )
 
-    async def execute(self, tool_call: ToolCall) -> ToolResult:
+    async def execute(self, tool_call: ToolCall, caller_role: Optional[AgentRole] = None) -> ToolResult:
         # --- Sanitize all string arguments before processing ---
         sanitized_args = {}
         for key, val in (tool_call.arguments or {}).items():
@@ -133,6 +144,33 @@ class ToolExecutor(IToolExecutor):
             )
 
         tool, category = entry
+
+        # Defense-in-depth: Tool Registry role-based ACL check.
+        # If a registry and caller_role are provided, verify the tool is
+        # in the caller's allowlist. This catches cases where an agent
+        # somehow bypasses its own registry check (e.g., future agent
+        # that doesn't use BaseAgent._call_tool).
+        if self._registry and caller_role:
+            if not self._registry.is_allowed(tool_call.tool_name, caller_role):
+                logger.warning(
+                    f"[REGISTRY] Blocked tool '{tool_call.tool_name}' for role "
+                    f"'{caller_role.value}' at executor level"
+                )
+                self._audit(
+                    "tool_blocked",
+                    f"tool={tool_call.tool_name}, role={caller_role.value}",
+                    "registry_denied",
+                    metadata={
+                        "tool": tool_call.tool_name,
+                        "role": caller_role.value,
+                        "reason": "registry_acl",
+                    },
+                )
+                return ToolResult(
+                    tool_name=tool_call.tool_name,
+                    success=False,
+                    error=f"Tool '{tool_call.tool_name}' not allowed for role '{caller_role.value}'",
+                )
 
         # Bug fix #10: Enforce audit mode centrally for ACTIVE tools.
         # Individual tools check audit mode themselves, but this provides

@@ -126,7 +126,7 @@ class BaseAgent(ABC):
         )
 
         call = ToolCall(tool_name=tool_name, arguments=arguments)
-        result = await self.__tools.execute(call)
+        result = await self.__tools.execute(call, caller_role=self._role)
 
         result_text = result.output or result.error or ""
         self._log_activity(

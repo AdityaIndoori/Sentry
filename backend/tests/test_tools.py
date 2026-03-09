@@ -28,6 +28,19 @@ from backend.tools.executor import (
 )
 
 
+def _make_executor(project_root, mode=SentryMode.AUDIT, registry=None):
+    """Create a ToolExecutor with a temp project root and optional registry."""
+    import os
+    os.makedirs(os.path.join(str(project_root), "config"), exist_ok=True)
+    db_file = os.path.join(str(project_root), "config", "db.py")
+    if not os.path.exists(db_file):
+        with open(db_file, "w") as f:
+            f.write("DB_HOST = 'localhost'\nDB_PORT = 5432\n")
+    config = SecurityConfig(mode=mode, project_root=str(project_root))
+    guard = SecurityGuard(config)
+    return ToolExecutor(guard, str(project_root), registry=registry)
+
+
 class TestReadFileTool:
     @pytest.fixture
     def tool(self, security_guard, project_root):
@@ -503,6 +516,65 @@ class TestExecutorDisabledAndStopModes:
             assert "STOP_SENTRY" in result.error
         finally:
             os.remove(stop_path)
+
+
+class TestExecutorRegistryEnforcement:
+    """Tests for defense-in-depth Tool Registry enforcement at executor level."""
+
+    @pytest.fixture
+    def executor_with_registry(self, tmp_path):
+        from backend.shared.tool_registry import TrustedToolRegistry
+        from backend.shared.vault import AgentRole
+        registry = TrustedToolRegistry()
+        registry.register("read_file", [AgentRole.DETECTIVE])
+        registry.register("grep_search", [AgentRole.DETECTIVE])
+        registry.register("apply_patch", [AgentRole.SURGEON], is_active=True)
+        registry.register("restart_service", [AgentRole.SURGEON], is_active=True)
+        return _make_executor(tmp_path, mode=SentryMode.ACTIVE, registry=registry)
+
+    @pytest.mark.asyncio
+    async def test_registry_allows_valid_role(self, executor_with_registry):
+        """Detective accessing read_file should be allowed."""
+        from backend.shared.vault import AgentRole
+        with patch.object(executor_with_registry._read_file, "execute", new_callable=AsyncMock,
+                          return_value={"success": True, "output": "file content"}):
+            result = await executor_with_registry.execute(
+                ToolCall(tool_name="read_file", arguments={"path": "test.py"}),
+                caller_role=AgentRole.DETECTIVE,
+            )
+            assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_registry_blocks_invalid_role(self, executor_with_registry):
+        """Detective trying apply_patch should be blocked by registry."""
+        from backend.shared.vault import AgentRole
+        result = await executor_with_registry.execute(
+            ToolCall(tool_name="apply_patch", arguments={"file_path": "a.py", "diff": "x"}),
+            caller_role=AgentRole.DETECTIVE,
+        )
+        assert result.success is False
+        assert "not allowed" in result.error
+
+    @pytest.mark.asyncio
+    async def test_registry_blocks_surgeon_from_read_tools(self, executor_with_registry):
+        """Surgeon trying grep_search should be blocked by registry."""
+        from backend.shared.vault import AgentRole
+        result = await executor_with_registry.execute(
+            ToolCall(tool_name="grep_search", arguments={"pattern": "err", "path": "."}),
+            caller_role=AgentRole.SURGEON,
+        )
+        assert result.success is False
+        assert "not allowed" in result.error
+
+    @pytest.mark.asyncio
+    async def test_no_role_skips_registry_check(self, executor_with_registry):
+        """When caller_role is None, registry check is skipped (backward compat)."""
+        with patch.object(executor_with_registry._read_file, "execute", new_callable=AsyncMock,
+                          return_value={"success": True, "output": "content"}):
+            result = await executor_with_registry.execute(
+                ToolCall(tool_name="read_file", arguments={"path": "test.py"}),
+            )
+            assert result.success is True
 
 
 class TestExecutorToolDefinitions:

@@ -133,8 +133,8 @@ async def lifespan(app: FastAPI):  # pragma: no cover
     _throttle = AgentThrottle(max_actions_per_minute=5)
     _registry = create_default_registry()
 
-    # Pass audit_log to ToolExecutor so tool executions are logged
-    tools = ToolExecutor(security, _config.security.project_root, audit_log=_audit_log)
+    # Pass audit_log and registry to ToolExecutor for defense-in-depth
+    tools = ToolExecutor(security, _config.security.project_root, audit_log=_audit_log, registry=_registry)
     llm = create_llm_client(_config)
     cb = CostCircuitBreaker(
         max_cost_usd=_config.security.max_cost_per_10min_usd
