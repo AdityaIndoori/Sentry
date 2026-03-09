@@ -243,13 +243,6 @@ class IncidentGraphBuilder:
 
         return graph.compile()
 
-    # ── Zero Trust helpers ───────────────────────────────
-
-    @property
-    def _has_zero_trust(self) -> bool:
-        """Check if Zero Trust dependencies are available for agent delegation."""
-        return self._vault is not None and self._gateway is not None
-
     # ── Node implementations ─────────────────────────────
 
     async def _triage_node(self, state: IncidentGraphState) -> IncidentGraphState:
@@ -279,49 +272,18 @@ class IncidentGraphBuilder:
             service_context = state.get("service_context", "")
             memory_hints = [{"symptom": h.symptom, "root_cause": h.root_cause} for h in relevant] if relevant else None
 
-            # ── Agent delegation (Zero Trust path) ──
-            if self._has_zero_trust:
-                incident.current_agent_action = "Calling TriageAgent (secured)..."
-                agent = TriageAgent(
-                    vault=self._vault, llm=self._llm,
-                    gateway=self._gateway, audit_log=self._audit_log,
-                )
-                result = await agent.run(incident, memory_hints=memory_hints, service_context=service_context)
-                self._track_cost(result)
+            # ── Delegate to TriageAgent (Zero Trust secured) ──
+            incident.current_agent_action = "Calling TriageAgent (secured)..."
+            agent = TriageAgent(
+                vault=self._vault, llm=self._llm,
+                gateway=self._gateway, audit_log=self._audit_log,
+            )
+            result = await agent.run(incident, memory_hints=memory_hints, service_context=service_context)
+            self._track_cost(result)
 
-                severity_str = result.get("severity", "medium")
-                verdict = result.get("verdict", "INVESTIGATE")
-                summary = result.get("summary", "")
-            else:
-                # ── Fallback: direct LLM call (no security layers) ──
-                prompt = _build_triage_prompt(incident, relevant, service_context)
-                incident.current_agent_action = "Calling LLM (effort: low)..."
-                incident.log_activity(ActivityType.LLM_CALL, "triage",
-                                      "Calling LLM for triage",
-                                      metadata={"effort": "low"})
-
-                response = await self._llm.analyze(prompt, effort="low")
-                self._track_cost(response)
-
-                if response.get("error") and not response.get("text", "").strip():
-                    error_msg = response["error"]
-                    logger.error(f"Triage LLM call failed for {incident.id}: {error_msg}")
-                    incident.log_activity(ActivityType.ERROR, "triage",
-                                          f"LLM returned error: {error_msg}")
-                    incident.state = IncidentState.ESCALATED
-                    incident.current_agent_action = None
-                    return {**state, "incident": incident, "error": error_msg}
-
-                text = response.get("text", "")
-                incident.log_activity(ActivityType.INFO, "triage", "LLM response received",
-                                      detail=text[:300],
-                                      metadata={"input_tokens": response.get("input_tokens", 0),
-                                                "output_tokens": response.get("output_tokens", 0)})
-
-                triage = TriageResult.parse_safe(text)
-                severity_str = triage.severity
-                verdict = triage.verdict
-                summary = triage.summary
+            severity_str = result.get("severity", "medium")
+            verdict = result.get("verdict", "INVESTIGATE")
+            summary = result.get("summary", "")
 
             # ── Apply result to incident (shared path) ──
             logger.info(f"Triage for {incident.id}: severity={severity_str}, verdict={verdict}")
