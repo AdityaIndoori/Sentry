@@ -24,6 +24,12 @@ from backend.orchestrator.schemas import (
     DiagnosisResult, RemediationResult, TriageResult, VerificationResult,
 )
 
+# Agent imports for Zero Trust delegation
+from backend.agents.triage_agent import TriageAgent
+from backend.agents.detective_agent import DetectiveAgent
+from backend.agents.surgeon_agent import SurgeonAgent
+from backend.agents.validator_agent import ValidatorAgent
+
 logger = logging.getLogger(__name__)
 
 
@@ -190,12 +196,23 @@ class IncidentGraphBuilder:
         tools: IToolExecutor,
         memory: IMemoryStore,
         circuit_breaker: CostCircuitBreaker,
+        vault=None,
+        gateway=None,
+        audit_log=None,
+        throttle=None,
+        registry=None,
     ):
         self._config = config
         self._llm = llm
         self._tools = tools
         self._memory = memory
         self._cb = circuit_breaker
+        # Zero Trust dependencies — when present, nodes delegate to Agent classes
+        self._vault = vault
+        self._gateway = gateway
+        self._audit_log = audit_log
+        self._throttle = throttle
+        self._registry = registry
 
     def build(self):
         """Build and compile the LangGraph StateGraph."""
@@ -226,10 +243,24 @@ class IncidentGraphBuilder:
 
         return graph.compile()
 
+    # ── Zero Trust helpers ───────────────────────────────
+
+    @property
+    def _has_zero_trust(self) -> bool:
+        """Check if Zero Trust dependencies are available for agent delegation."""
+        return self._vault is not None and self._gateway is not None
+
     # ── Node implementations ─────────────────────────────
 
     async def _triage_node(self, state: IncidentGraphState) -> IncidentGraphState:
-        """Phase 1: Quick severity assessment (low effort)."""
+        """Phase 1: Quick severity assessment (low effort).
+        
+        When Zero Trust deps are available, delegates to TriageAgent which provides:
+        - NHI identity + JIT credentials
+        - AI Gateway prompt injection scanning
+        - AI Gateway PII redaction on outputs
+        - Immutable audit trail logging
+        """
         incident = state["incident"]
         incident.state = IncidentState.TRIAGE
         incident.current_agent_action = "Analyzing error severity..."
@@ -246,69 +277,82 @@ class IncidentGraphBuilder:
                                       detail="; ".join(h.symptom[:60] for h in relevant[:3]))
 
             service_context = state.get("service_context", "")
-            prompt = _build_triage_prompt(incident, relevant, service_context)
-            incident.current_agent_action = "Calling LLM (effort: low)..."
-            incident.log_activity(ActivityType.LLM_CALL, "triage",
-                                  "Calling LLM for triage",
-                                  metadata={"effort": "low"})
+            memory_hints = [{"symptom": h.symptom, "root_cause": h.root_cause} for h in relevant] if relevant else None
 
-            response = await self._llm.analyze(prompt, effort="low")
-            self._track_cost(response)
+            # ── Agent delegation (Zero Trust path) ──
+            if self._has_zero_trust:
+                incident.current_agent_action = "Calling TriageAgent (secured)..."
+                agent = TriageAgent(
+                    vault=self._vault, llm=self._llm,
+                    gateway=self._gateway, audit_log=self._audit_log,
+                )
+                result = await agent.run(incident, memory_hints=memory_hints, service_context=service_context)
+                self._track_cost(result)
 
-            # --- #4: Empty LLM response guard ---
-            if response.get("error") and not response.get("text", "").strip():
-                error_msg = response["error"]
-                logger.error(f"Triage LLM call failed for {incident.id}: {error_msg}")
-                incident.log_activity(ActivityType.ERROR, "triage",
-                                      f"LLM returned error: {error_msg}")
-                incident.state = IncidentState.ESCALATED
-                incident.current_agent_action = None
-                return {**state, "incident": incident, "error": error_msg}
+                severity_str = result.get("severity", "medium")
+                verdict = result.get("verdict", "INVESTIGATE")
+                summary = result.get("summary", "")
+            else:
+                # ── Fallback: direct LLM call (no security layers) ──
+                prompt = _build_triage_prompt(incident, relevant, service_context)
+                incident.current_agent_action = "Calling LLM (effort: low)..."
+                incident.log_activity(ActivityType.LLM_CALL, "triage",
+                                      "Calling LLM for triage",
+                                      metadata={"effort": "low"})
 
-            text = response.get("text", "")
-            logger.info(f"Triage raw for {incident.id}: {text[:200]}")
-            incident.log_activity(ActivityType.INFO, "triage", "LLM response received",
-                                  detail=text[:300],
-                                  metadata={"input_tokens": response.get("input_tokens", 0),
-                                            "output_tokens": response.get("output_tokens", 0)})
+                response = await self._llm.analyze(prompt, effort="low")
+                self._track_cost(response)
 
-            # Parse into structured result (Tier 2: JSON → Tier 3: regex)
-            triage = TriageResult.parse_safe(text)
-            logger.info(
-                f"Triage parsed for {incident.id}: "
-                f"severity={triage.severity}, verdict={triage.verdict}, "
-                f"summary={triage.summary[:100]}"
-            )
+                if response.get("error") and not response.get("text", "").strip():
+                    error_msg = response["error"]
+                    logger.error(f"Triage LLM call failed for {incident.id}: {error_msg}")
+                    incident.log_activity(ActivityType.ERROR, "triage",
+                                          f"LLM returned error: {error_msg}")
+                    incident.state = IncidentState.ESCALATED
+                    incident.current_agent_action = None
+                    return {**state, "incident": incident, "error": error_msg}
 
-            # Apply structured result to incident
+                text = response.get("text", "")
+                incident.log_activity(ActivityType.INFO, "triage", "LLM response received",
+                                      detail=text[:300],
+                                      metadata={"input_tokens": response.get("input_tokens", 0),
+                                                "output_tokens": response.get("output_tokens", 0)})
+
+                triage = TriageResult.parse_safe(text)
+                severity_str = triage.severity
+                verdict = triage.verdict
+                summary = triage.summary
+
+            # ── Apply result to incident (shared path) ──
+            logger.info(f"Triage for {incident.id}: severity={severity_str}, verdict={verdict}")
             sev_map = {
                 "critical": IncidentSeverity.CRITICAL,
                 "high": IncidentSeverity.HIGH,
                 "medium": IncidentSeverity.MEDIUM,
                 "low": IncidentSeverity.LOW,
             }
-            incident.severity = sev_map.get(triage.severity, IncidentSeverity.MEDIUM)
-            incident.triage_result = triage.summary
+            incident.severity = sev_map.get(severity_str, IncidentSeverity.MEDIUM)
+            incident.triage_result = summary
 
-            if triage.verdict == "FALSE_POSITIVE":
+            if verdict == "FALSE_POSITIVE":
                 incident.state = IncidentState.IDLE
                 incident.log_activity(ActivityType.DECISION, "triage",
                                       "Classified as FALSE POSITIVE — ignoring",
-                                      detail=triage.summary)
+                                      detail=summary)
             else:
                 incident.state = IncidentState.DIAGNOSIS
                 incident.log_activity(ActivityType.DECISION, "triage",
-                                      f"Classified as {triage.severity.upper()} — will investigate",
-                                      detail=triage.summary)
+                                      f"Classified as {severity_str.upper()} — will investigate",
+                                      detail=summary)
 
             incident.log_activity(ActivityType.PHASE_COMPLETE, "triage", "Triage complete",
-                                  metadata={"severity": triage.severity, "verdict": triage.verdict})
+                                  metadata={"severity": severity_str, "verdict": verdict})
             incident.current_agent_action = None
 
             return {
                 **state,
                 "incident": incident,
-                "triage": triage.model_dump(),
+                "triage": {"severity": severity_str, "verdict": verdict, "summary": summary},
                 "tool_results": [],
                 "tool_loop_count": 0,
             }

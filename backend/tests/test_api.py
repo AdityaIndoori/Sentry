@@ -406,8 +406,13 @@ class TestSecurityEndpoint:
     async def test_security_returns_full_posture(self):
         cfg = _make_config()
         orch = _make_orchestrator()
+        mock_vault = MagicMock()
+        mock_vault.is_killed = False
         with patch("backend.api.app._config", cfg), \
-             patch("backend.api.app._orchestrator", orch):
+             patch("backend.api.app._orchestrator", orch), \
+             patch("backend.api.app._vault", mock_vault), \
+             patch("backend.api.app._gateway", MagicMock()), \
+             patch("backend.api.app._audit_log", MagicMock()):
             transport = ASGITransport(app=app)
             async with AsyncClient(transport=transport, base_url="http://test") as client:
                 resp = await client.get("/api/security")

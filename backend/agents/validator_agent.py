@@ -35,7 +35,7 @@ class ValidatorAgent(BaseAgent):
     async def run(self, incident: Incident) -> dict:
         """
         Verify fix was successful.
-        Returns: {"resolved": bool, "reason": str}
+        Returns: {"resolved": bool, "reason": str, "input_tokens": int, "output_tokens": int}
         """
         cred = self._get_credential(scope="llm_call", ttl=30)
 
@@ -55,7 +55,10 @@ class ValidatorAgent(BaseAgent):
             )
 
             text = response.get("text", "")
-            return self._parse_using_schema(text)
+            result = self._parse_using_schema(text)
+            result["input_tokens"] = response.get("input_tokens", 0)
+            result["output_tokens"] = response.get("output_tokens", 0)
+            return result
 
         finally:
             self._vault.revoke_credential(cred.credential_id)

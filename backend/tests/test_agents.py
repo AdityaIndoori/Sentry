@@ -477,11 +477,19 @@ class TestSurgeonAgent:
         """Surgeon calls restart_service tool."""
         from backend.agents.surgeon_agent import SurgeonAgent
         llm = AsyncMock()
-        llm.analyze = AsyncMock(return_value={
-            "text": "FIX PROPOSED: Restart nginx",
-            "input_tokens": 100, "output_tokens": 50,
-            "tool_calls": [{"name": "restart_service", "arguments": {"service_name": "nginx"}}],
-        })
+        # First call: return a tool call. Second call: return text (no more tools).
+        llm.analyze = AsyncMock(side_effect=[
+            {
+                "text": "",
+                "input_tokens": 100, "output_tokens": 50,
+                "tool_calls": [{"name": "restart_service", "arguments": {"service_name": "nginx"}}],
+            },
+            {
+                "text": "FIX PROPOSED: Restart nginx",
+                "input_tokens": 50, "output_tokens": 30,
+                "tool_calls": [],
+            },
+        ])
         config = MagicMock()
         config.security.mode.value = "ACTIVE"
         tools = AsyncMock()

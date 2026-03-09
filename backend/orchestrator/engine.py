@@ -43,6 +43,10 @@ class Orchestrator(IOrchestrator):
         memory: IMemoryStore,
         circuit_breaker: CostCircuitBreaker,
         audit_log: Optional[ImmutableAuditLog] = None,
+        vault=None,
+        gateway=None,
+        throttle=None,
+        registry=None,
     ):
         self._config = config
         self._llm = llm
@@ -50,6 +54,10 @@ class Orchestrator(IOrchestrator):
         self._memory = memory
         self._cb = circuit_breaker
         self._audit_log = audit_log
+        self._vault = vault
+        self._gateway = gateway
+        self._throttle = throttle
+        self._registry = registry
         self._active_incidents: dict[str, Incident] = {}
         self._resolved_incidents: list[Incident] = []
 
@@ -62,8 +70,12 @@ class Orchestrator(IOrchestrator):
         else:
             logger.warning("No service context configured — agents will operate without service awareness")
 
-        # Build the LangGraph compiled graph
-        builder = IncidentGraphBuilder(config, llm, tools, memory, circuit_breaker)
+        # Build the LangGraph compiled graph — pass Zero Trust deps for agent delegation
+        builder = IncidentGraphBuilder(
+            config, llm, tools, memory, circuit_breaker,
+            vault=vault, gateway=gateway, audit_log=audit_log,
+            throttle=throttle, registry=registry,
+        )
         self._graph = builder.build()
 
     async def handle_event(self, event: LogEvent) -> Optional[Incident]:

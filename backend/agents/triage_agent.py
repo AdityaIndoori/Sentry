@@ -33,11 +33,13 @@ class TriageAgent(BaseAgent):
         self._llm = llm
 
     async def run(
-        self, incident: Incident, memory_hints: list[dict] = None
+        self, incident: Incident, memory_hints: list[dict] = None,
+        service_context: str = "",
     ) -> dict:
         """
         Classify the incident.
-        Returns: {"severity": str, "verdict": str, "summary": str}
+        Returns: {"severity": str, "verdict": str, "summary": str,
+                  "input_tokens": int, "output_tokens": int}
         """
         # Get JIT credential for this LLM call
         cred = self._get_credential(scope="llm_call", ttl=30)
@@ -56,8 +58,13 @@ class TriageAgent(BaseAgent):
                         f"Root cause: {hint.get('root_cause', 'N/A')}\n"
                     )
 
+            svc_context = ""
+            if service_context:
+                svc_context = f"\n\n{service_context}\n"
+
             user_message = (
                 f"Classify this error:\n\n{safe_symptom}"
+                f"{svc_context}"
                 f"{memory_context}"
             )
 
@@ -71,6 +78,8 @@ class TriageAgent(BaseAgent):
 
             text = response.get("text", "")
             parsed = self._parse_using_schema(text)
+            parsed["input_tokens"] = response.get("input_tokens", 0)
+            parsed["output_tokens"] = response.get("output_tokens", 0)
 
             # Audit log the triage verdict
             self._audit(

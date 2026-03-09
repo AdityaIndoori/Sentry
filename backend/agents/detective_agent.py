@@ -47,19 +47,26 @@ class DetectiveAgent(BaseAgent):
         self._registry = registry
         self._throttle = throttle
 
-    async def run(self, incident: Incident) -> dict:
+    async def run(self, incident: Incident, service_context: str = "") -> dict:
         """
         Investigate incident root cause.
-        Returns: {"root_cause": str, "recommended_fix": str, "tool_results": list}
+        Returns: {"root_cause": str, "recommended_fix": str, "tool_results": list,
+                  "input_tokens": int, "output_tokens": int}
         """
         cred = self._get_credential(scope="llm_call", ttl=120)
         tool_results = []
+        total_input_tokens = 0
+        total_output_tokens = 0
 
         try:
             safe_symptom = self._scan_input(incident.symptom)
+            svc_text = ""
+            if service_context:
+                svc_text = f"\n\n{service_context}\n"
             messages = [
                 f"Investigate this incident:\n\nSymptom: {safe_symptom}\n"
                 f"Triage result: {incident.triage_result or 'N/A'}"
+                f"{svc_text}"
             ]
 
             for loop_idx in range(MAX_TOOL_LOOPS):
@@ -79,6 +86,8 @@ class DetectiveAgent(BaseAgent):
                     effort="high",
                     tools=tool_defs,
                 )
+                total_input_tokens += response.get("input_tokens", 0)
+                total_output_tokens += response.get("output_tokens", 0)
 
                 text = response.get("text", "")
                 tool_calls = response.get("tool_calls", [])
@@ -90,6 +99,8 @@ class DetectiveAgent(BaseAgent):
                         tr if isinstance(tr, dict) else {"output": str(tr)}
                         for tr in tool_results
                     ]
+                    result["input_tokens"] = total_input_tokens
+                    result["output_tokens"] = total_output_tokens
                     return result
 
                 # Execute tool calls
@@ -133,11 +144,18 @@ class DetectiveAgent(BaseAgent):
                     except Exception as e:
                         messages.append(f"Tool error ({tool_name}): {str(e)}")
 
+                # Cap total prompt size to prevent token explosion
+                full_text = "\n\n".join(messages)
+                if len(full_text) > 50000:
+                    messages = [messages[0]] + messages[-5:]
+
             # If we exhausted loops without a final answer
             return {
                 "root_cause": "Investigation inconclusive after max tool loops",
                 "recommended_fix": "Manual investigation required",
                 "tool_results": tool_results,
+                "input_tokens": total_input_tokens,
+                "output_tokens": total_output_tokens,
             }
 
         finally:

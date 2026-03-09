@@ -60,6 +60,9 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
 _orchestrator: Orchestrator = None
 _watcher: LogWatcher = None
 _config = None
+_vault = None
+_gateway = None
+_audit_log = None
 _watcher_task: object = None  # asyncio.Task for the watcher->orchestrator loop
 
 
@@ -116,15 +119,33 @@ async def lifespan(app: FastAPI):  # pragma: no cover
             logging.getLogger(uv_logger_name).addHandler(file_handler)
         logger.info(f"Logging to file: {log_file}")
 
+    global _vault, _gateway, _audit_log
+
     security = SecurityGuard(_config.security)
     memory = JSONMemoryStore(_config.memory)
-    tools = ToolExecutor(security, _config.security.project_root)
+
+    # Zero Trust security dependencies — now wired into the production runtime
+    _vault = LocalVault()
+    _gateway = AIGateway()
+    _audit_log = ImmutableAuditLog(_config.audit_log_path)
+    throttle = AgentThrottle(max_actions_per_minute=5)
+    registry = create_default_registry()
+
+    # Pass audit_log to ToolExecutor so tool executions are logged
+    tools = ToolExecutor(security, _config.security.project_root, audit_log=_audit_log)
     llm = create_llm_client(_config)
     cb = CostCircuitBreaker(
         max_cost_usd=_config.security.max_cost_per_10min_usd
     )
 
-    _orchestrator = Orchestrator(_config, llm, tools, memory, cb)
+    _orchestrator = Orchestrator(
+        _config, llm, tools, memory, cb,
+        audit_log=_audit_log,
+        vault=_vault,
+        gateway=_gateway,
+        throttle=throttle,
+        registry=registry,
+    )
     _watcher = LogWatcher(_config.watcher)
 
     logger.info(f"Sentry started in {_config.security.mode.value} mode")
@@ -339,9 +360,9 @@ async def get_security_status():
 
     return {
         "zero_trust": {
-            "vault": "active",
-            "ai_gateway": "active",
-            "audit_log": "active",
+            "vault": "active" if _vault and not _vault.is_killed else "inactive",
+            "ai_gateway": "active" if _gateway else "inactive",
+            "audit_log": "active" if _audit_log else "inactive",
             "agent_throttle": "active",
             "tool_registry": "active",
         },
