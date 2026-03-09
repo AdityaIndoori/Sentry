@@ -18,7 +18,7 @@ from backend.shared.vault import AgentRole, IVault
 from backend.shared.ai_gateway import AIGateway
 from backend.shared.agent_throttle import AgentThrottle
 from backend.shared.tool_registry import TrustedToolRegistry
-from backend.shared.models import Incident, ToolCall
+from backend.shared.models import Incident
 from backend.shared.prompts import REMEDIATION_SYSTEM_PROMPT as SURGEON_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -42,9 +42,8 @@ class SurgeonAgent(BaseAgent):
         config: Any,
         audit_log=None,
     ):
-        super().__init__(vault, AgentRole.SURGEON, gateway, audit_log=audit_log)
-        self._llm = llm
-        self._tools = tools
+        super().__init__(vault, AgentRole.SURGEON, gateway, audit_log=audit_log,
+                         llm=llm, tools=tools)
         self._registry = registry
         self._throttle = throttle
         self._config = config
@@ -53,8 +52,11 @@ class SurgeonAgent(BaseAgent):
         """
         Propose and optionally apply a fix.
         Returns: {"fix_description": str, "fix_applied": bool, "tool_results": list,
-                  "tools_used": list, "input_tokens": int, "output_tokens": int}
+                  "tools_used": list, "input_tokens": int, "output_tokens": int,
+                  "activities": list}
         """
+        self._activities = []
+        self._call_count = 0
         cred = self._get_credential(scope="llm_call", ttl=90)
         tool_results = []
         tools_used = []
@@ -63,7 +65,6 @@ class SurgeonAgent(BaseAgent):
         max_remediation_loops = 4
 
         try:
-            # Include code context from diagnosis so the Surgeon sees actual source code
             diag_context = ""
             if tool_results_context:
                 diag_context = "\n\nCode investigated during diagnosis:\n"
@@ -77,15 +78,12 @@ class SurgeonAgent(BaseAgent):
                 f"{diag_context}"
             )
 
-            # Bug fix #1: ILLMClient.analyze() signature is (prompt, effort, tools).
             full_prompt = f"{SURGEON_SYSTEM_PROMPT}\n\nApply a fix for this incident:\n\n{context}"
-            tool_defs = self._tools.get_remediation_tool_definitions() if hasattr(self._tools, 'get_remediation_tool_definitions') else self._tools.get_tool_definitions() if hasattr(self._tools, 'get_tool_definitions') else None
+            tool_defs = self._get_tool_definitions(category="remediation")
 
             for rem_loop in range(max_remediation_loops):
-                response = await self._llm.analyze(
-                    prompt=full_prompt,
-                    effort="medium",
-                    tools=tool_defs,
+                response = await self._call_llm(
+                    prompt=full_prompt, effort="medium", tools=tool_defs,
                 )
                 total_input_tokens += response.get("input_tokens", 0)
                 total_output_tokens += response.get("output_tokens", 0)
@@ -94,10 +92,8 @@ class SurgeonAgent(BaseAgent):
                 tool_calls = response.get("tool_calls", [])
 
                 if not tool_calls:
-                    # No more tool calls — LLM provided a text response
                     break
 
-                # Execute tool calls
                 for tc in tool_calls:
                     tool_name = tc.get("name", "")
                     tool_args = tc.get("arguments", {})
@@ -110,10 +106,8 @@ class SurgeonAgent(BaseAgent):
                         logger.warning(f"Surgeon {self.agent_id} throttled")
                         break
 
-                    # Bug fix #2: IToolExecutor.execute() takes a single ToolCall object.
                     try:
-                        call = ToolCall(tool_name=tool_name, arguments=tool_args)
-                        result = await self._tools.execute(call)
+                        result = await self._call_tool(tool_name, tool_args)
                         tools_used.append(tool_name)
                         result_text = result.output or result.error or ""
                         full_prompt += f"\n\nTool {tool_name} result: {result_text[:2000]}"
@@ -136,7 +130,6 @@ class SurgeonAgent(BaseAgent):
                             "output": str(e),
                         })
 
-                # Cap prompt size
                 if len(full_prompt) > 50000:
                     full_prompt = full_prompt[:25000] + "\n\n[...truncated...]\n\n" + full_prompt[-20000:]
 
@@ -149,6 +142,7 @@ class SurgeonAgent(BaseAgent):
                 "tools_used": tools_used,
                 "input_tokens": total_input_tokens,
                 "output_tokens": total_output_tokens,
+                "activities": self._activities,
             }
 
         finally:

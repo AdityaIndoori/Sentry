@@ -51,132 +51,6 @@ class IncidentGraphState(TypedDict, total=False):
 
 
 # ---------------------------------------------------------------------------
-# Node functions - each is a pure(ish) function that transforms state
-# ---------------------------------------------------------------------------
-
-def _build_triage_prompt(incident: Incident, history: list, service_context: str = "") -> str:
-    hist_text = ""
-    if history:
-        hist_text = "\n\nSimilar past incidents:\n"
-        for h in history[:3]:
-            hist_text += f"- {h.symptom} -> {h.root_cause} -> Fix: {h.fix}\n"
-
-    svc_text = ""
-    if service_context:
-        svc_text = f"\n\n--- SERVICE CONTEXT (what this error relates to) ---\n{service_context}\n--- END SERVICE CONTEXT ---\n"
-
-    return (
-        f"You are Sentry, an autonomous server monitoring AI.\n"
-        f"Triage this production error log entry:\n\n"
-        f"ERROR: {incident.symptom}\n"
-        f"{svc_text}"
-        f"{hist_text}\n"
-        f"Respond in this EXACT format:\n"
-        f"SEVERITY: <low|medium|high|critical>\n"
-        f"VERDICT: <INVESTIGATE|FALSE POSITIVE>\n"
-        f"SUMMARY: <one-line description of the issue>\n\n"
-        f"IMPORTANT: Only use 'VERDICT: FALSE POSITIVE' for truly benign log entries. "
-        f"Any actual error, exception, or service degradation MUST be 'VERDICT: INVESTIGATE'."
-    )
-
-
-def _build_diagnosis_prompt(incident: Incident, config: AppConfig, service_context: str = "") -> str:
-    is_audit = config.security.mode == SentryMode.AUDIT
-    audit_note = ""
-    if is_audit:
-        audit_note = (
-            "\n\nIMPORTANT: System is in AUDIT mode. Active tools will only log intent. "
-            "Read-only tools work normally. Focus on read-only investigation first, "
-            "then provide your best diagnosis."
-        )
-    svc_text = ""
-    if service_context:
-        svc_text = (
-            f"\n\n{service_context}\n"
-            f"\nStart by reading the source code to understand how the service works. "
-            f"Look at config files, entry points, error handlers, and dependencies. "
-            f"Then investigate what went wrong."
-        )
-    return (
-        f"You are diagnosing a server incident.\n"
-        f"Symptom: {incident.symptom}\n"
-        f"Severity: {incident.severity.value}\n"
-        f"{svc_text}\n"
-        f"Use the available tools to investigate. "
-        f"Find the root cause. Be specific.{audit_note}"
-    )
-
-
-def _build_diagnosis_summary_prompt(
-    incident: Incident, tool_results: list, is_audit: bool
-) -> str:
-    results_text = "\n".join(f"  - {r}" for r in tool_results[-20:])
-    audit_note = ""
-    if is_audit:
-        audit_note = (
-            "\nNote: System is in AUDIT mode. Provide best-effort diagnosis "
-            "based on error symptoms and any files successfully read."
-        )
-    return (
-        f"Provide your FINAL DIAGNOSIS for this incident.\n\n"
-        f"Symptom: {incident.symptom}\n"
-        f"Severity: {incident.severity.value}\n"
-        f"Triage: {incident.triage_result or 'N/A'}\n\n"
-        f"Investigation results:\n{results_text}\n{audit_note}\n\n"
-        f"DO NOT request any more tools. Provide analysis now:\n"
-        f"ROOT CAUSE: <what is wrong>\n"
-        f"RECOMMENDED FIX: <what to do>"
-    )
-
-
-def _build_remediation_prompt(incident: Incident, is_audit: bool, tool_results: list = None) -> str:
-    # Include code context from diagnosis so the Surgeon sees actual source code
-    context = ""
-    if tool_results:
-        context = "\n\nCode investigated during diagnosis:\n"
-        for r in tool_results[-15:]:
-            context += f"  {r}\n"
-
-    if is_audit:
-        return (
-            f"Root cause: {incident.root_cause}\n"
-            f"Symptom: {incident.symptom}\n"
-            f"{context}\n"
-            f"System is in AUDIT mode. Describe the fix you WOULD apply. "
-            f"Do NOT call any tools. Just describe the plan.\n"
-            f"End with: FIX PROPOSED: <one-line summary>"
-        )
-    return (
-        f"Root cause: {incident.root_cause}\n"
-        f"Symptom: {incident.symptom}\n"
-        f"{context}\n"
-        f"Apply a fix using the available tools. Follow this workflow:\n"
-        f"1. Use read_file to see the exact current code of the file(s) you need to patch.\n"
-        f"2. Use apply_patch to make the minimal targeted fix.\n"
-        f"3. CRITICAL: After patching, you MUST call restart_service (no arguments needed) "
-        f"to restart the monitored service so the code changes take effect. "
-        f"Without a restart, patched files won't be loaded by the running process.\n\n"
-        f"Be conservative - prefer minimal, targeted patches. "
-        f"Do NOT skip the restart_service step."
-    )
-
-
-def _build_verify_prompt(incident: Incident, is_audit: bool) -> str:
-    if is_audit:
-        return (
-            f"Incident: {incident.symptom}\n"
-            f"Proposed fix: {incident.fix_applied or 'Audit plan provided'}\n\n"
-            f"System is in AUDIT mode - no fix was applied. "
-            f"The diagnosis and plan have been recorded. Reply 'resolved'."
-        )
-    return (
-        f"Incident: {incident.symptom}\n"
-        f"Fix applied: {incident.fix_applied}\n\n"
-        f"Is this issue resolved? Reply 'fixed' or 'not fixed'."
-    )
-
-
-# ---------------------------------------------------------------------------
 # Graph Builder - creates the compiled LangGraph
 # ---------------------------------------------------------------------------
 
@@ -280,6 +154,7 @@ class IncidentGraphBuilder:
             )
             result = await agent.run(incident, memory_hints=memory_hints, service_context=service_context)
             self._track_cost(result)
+            self._apply_agent_activities(incident, result, "triage")
 
             severity_str = result.get("severity", "medium")
             verdict = result.get("verdict", "INVESTIGATE")
@@ -360,6 +235,7 @@ class IncidentGraphBuilder:
             )
             result = await agent.run(incident, service_context=service_context)
             self._track_cost(result)
+            self._apply_agent_activities(incident, result, "diagnosis")
 
             # Apply result to incident
             incident.root_cause = result.get("root_cause", "Unknown")
@@ -421,6 +297,7 @@ class IncidentGraphBuilder:
             )
             result = await agent.run(incident, tool_results_context=tool_results)
             self._track_cost(result)
+            self._apply_agent_activities(incident, result, "remediation")
 
             # Apply result to incident
             incident.fix_applied = result.get("fix_description", "No fix")
@@ -479,6 +356,7 @@ class IncidentGraphBuilder:
             )
             result = await agent.run(incident)
             self._track_cost(result)
+            self._apply_agent_activities(incident, result, "verification")
 
             resolved = result.get("resolved", False)
             reason = result.get("reason", "")
@@ -541,6 +419,26 @@ class IncidentGraphBuilder:
         return "diagnosis"
 
     # ── Helpers ──────────────────────────────────────────
+
+    def _apply_agent_activities(self, incident: Incident, result: dict, phase: str):
+        """Apply activity entries returned by an agent to the incident.
+        
+        Agents collect activities via BaseAgent._log_activity() during run().
+        This method transfers them to the incident's activity log so the
+        dashboard can display LLM_CALL, TOOL_CALL, TOOL_RESULT entries.
+        """
+        for activity in result.get("activities", []):
+            try:
+                activity_type = ActivityType(activity["activity_type"])
+            except (ValueError, KeyError):
+                activity_type = ActivityType.INFO
+            incident.log_activity(
+                activity_type,
+                activity.get("agent", phase),
+                activity.get("message", ""),
+                detail=activity.get("detail", ""),
+                metadata=activity.get("metadata"),
+            )
 
     def _track_cost(self, response: dict) -> None:
         self._cb.record_usage(

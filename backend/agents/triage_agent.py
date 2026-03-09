@@ -10,13 +10,12 @@ Tools: NONE (triage is analysis-only, no tool access)
 """
 
 import logging
-import re
 from typing import Any, Optional
 
 from backend.agents.base_agent import BaseAgent
 from backend.shared.vault import AgentRole, IVault
 from backend.shared.ai_gateway import AIGateway
-from backend.shared.models import Incident, MemoryEntry
+from backend.shared.models import Incident
 from backend.shared.prompts import TRIAGE_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -29,8 +28,7 @@ class TriageAgent(BaseAgent):
     """
 
     def __init__(self, vault: IVault, llm: Any, gateway: AIGateway, audit_log=None):
-        super().__init__(vault, AgentRole.TRIAGE, gateway, audit_log=audit_log)
-        self._llm = llm
+        super().__init__(vault, AgentRole.TRIAGE, gateway, audit_log=audit_log, llm=llm)
 
     async def run(
         self, incident: Incident, memory_hints: list[dict] = None,
@@ -39,16 +37,15 @@ class TriageAgent(BaseAgent):
         """
         Classify the incident.
         Returns: {"severity": str, "verdict": str, "summary": str,
-                  "input_tokens": int, "output_tokens": int}
+                  "input_tokens": int, "output_tokens": int, "activities": list}
         """
-        # Get JIT credential for this LLM call
+        self._activities = []
+        self._call_count = 0
         cred = self._get_credential(scope="llm_call", ttl=30)
 
         try:
-            # Scan the input through AI Gateway
             safe_symptom = self._scan_input(incident.symptom)
 
-            # Build context
             memory_context = ""
             if memory_hints:
                 memory_context = "\n\nPast similar incidents:\n"
@@ -68,20 +65,15 @@ class TriageAgent(BaseAgent):
                 f"{memory_context}"
             )
 
-            # Bug fix #1: ILLMClient.analyze() signature is (prompt, effort, tools).
-            # Combine system prompt + user message into a single prompt string.
             full_prompt = f"{TRIAGE_SYSTEM_PROMPT}\n\n{user_message}"
-            response = await self._llm.analyze(
-                prompt=full_prompt,
-                effort="low",
-            )
+            response = await self._call_llm(prompt=full_prompt, effort="low")
 
             text = response.get("text", "")
             parsed = self._parse_using_schema(text)
             parsed["input_tokens"] = response.get("input_tokens", 0)
             parsed["output_tokens"] = response.get("output_tokens", 0)
+            parsed["activities"] = self._activities
 
-            # Audit log the triage verdict
             self._audit(
                 "triage_verdict",
                 f"severity={parsed['severity']}, verdict={parsed['verdict']}, summary={parsed.get('summary', 'N/A')}",
@@ -91,7 +83,6 @@ class TriageAgent(BaseAgent):
             return parsed
 
         finally:
-            # Always revoke credential after use
             self._vault.revoke_credential(cred.credential_id)
 
     def _parse_using_schema(self, text: str) -> dict:

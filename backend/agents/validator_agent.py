@@ -10,7 +10,6 @@ Tools: NONE (validation is analysis of fix results only)
 """
 
 import logging
-import re
 from typing import Any
 
 from backend.agents.base_agent import BaseAgent
@@ -29,14 +28,16 @@ class ValidatorAgent(BaseAgent):
     """
 
     def __init__(self, vault: IVault, llm: Any, gateway: AIGateway, audit_log=None):
-        super().__init__(vault, AgentRole.VALIDATOR, gateway, audit_log=audit_log)
-        self._llm = llm
+        super().__init__(vault, AgentRole.VALIDATOR, gateway, audit_log=audit_log, llm=llm)
 
     async def run(self, incident: Incident) -> dict:
         """
         Verify fix was successful.
-        Returns: {"resolved": bool, "reason": str, "input_tokens": int, "output_tokens": int}
+        Returns: {"resolved": bool, "reason": str, "input_tokens": int,
+                  "output_tokens": int, "activities": list}
         """
+        self._activities = []
+        self._call_count = 0
         cred = self._get_credential(scope="llm_call", ttl=30)
 
         try:
@@ -46,18 +47,14 @@ class ValidatorAgent(BaseAgent):
                 f"Fix applied: {incident.fix_applied or 'None'}"
             )
 
-            # Bug fix #1: ILLMClient.analyze() signature is (prompt, effort, tools).
-            # Combine system prompt + user message into a single prompt string.
             full_prompt = f"{VALIDATOR_SYSTEM_PROMPT}\n\nVerify this fix:\n\n{context}"
-            response = await self._llm.analyze(
-                prompt=full_prompt,
-                effort="disabled",
-            )
+            response = await self._call_llm(prompt=full_prompt, effort="disabled")
 
             text = response.get("text", "")
             result = self._parse_using_schema(text)
             result["input_tokens"] = response.get("input_tokens", 0)
             result["output_tokens"] = response.get("output_tokens", 0)
+            result["activities"] = self._activities
             return result
 
         finally:
