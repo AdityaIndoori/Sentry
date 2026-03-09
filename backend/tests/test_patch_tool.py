@@ -1,5 +1,5 @@
 """
-Tests for mcp_tools/patch_tool.py — Apply patch tool (audit + active mode).
+Tests for tools/patch_tool.py — Apply patch tool (audit + active mode).
 """
 
 import asyncio
@@ -9,7 +9,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from backend.shared.security import SecurityGuard
 from backend.shared.config import SecurityConfig, SentryMode
-from backend.mcp_tools.patch_tool import ApplyPatchTool, _apply_unified_diff
+from backend.tools.patch_tool import ApplyPatchTool, _apply_unified_diff
 
 
 class TestApplyUnifiedDiff:

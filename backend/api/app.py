@@ -28,7 +28,7 @@ from backend.shared.agent_throttle import AgentThrottle
 from backend.shared.security import SecurityGuard as _SecurityGuardForSanitize
 from backend.shared.tool_registry import TrustedToolRegistry, create_default_registry
 from backend.memory.store import JSONMemoryStore
-from backend.mcp_tools.executor import MCPToolExecutor
+from backend.tools.executor import ToolExecutor
 from backend.orchestrator.engine import Orchestrator
 from backend.orchestrator.llm_client import create_llm_client
 from backend.watcher.log_watcher import LogWatcher
@@ -118,7 +118,7 @@ async def lifespan(app: FastAPI):  # pragma: no cover
 
     security = SecurityGuard(_config.security)
     memory = JSONMemoryStore(_config.memory)
-    tools = MCPToolExecutor(security, _config.security.project_root)
+    tools = ToolExecutor(security, _config.security.project_root)
     llm = create_llm_client(_config)
     cb = CostCircuitBreaker(
         max_cost_usd=_config.security.max_cost_per_10min_usd

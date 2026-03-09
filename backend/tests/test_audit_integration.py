@@ -170,13 +170,13 @@ class TestDetectiveAgentAuditLog:
 # ═══════════════════════════════════════════════════════════════
 
 class TestToolExecutorAuditLog:
-    """Verify MCPToolExecutor logs every tool execution to audit trail."""
+    """Verify ToolExecutor logs every tool execution to audit trail."""
 
     @pytest.mark.asyncio
     async def test_tool_executor_logs_execution(self, active_security_guard, audit_log):
         """Every tool execution MUST be logged."""
-        from backend.mcp_tools.executor import MCPToolExecutor
-        executor = MCPToolExecutor(
+        from backend.tools.executor import ToolExecutor
+        executor = ToolExecutor(
             active_security_guard,
             active_security_guard._config.project_root,
             audit_log=audit_log,
@@ -189,7 +189,7 @@ class TestToolExecutorAuditLog:
     @pytest.mark.asyncio
     async def test_tool_executor_logs_stop_block(self, tmp_path, audit_log):
         """STOP_SENTRY blocks MUST be logged."""
-        from backend.mcp_tools.executor import MCPToolExecutor
+        from backend.tools.executor import ToolExecutor
         stop_file = os.path.join(str(tmp_path), "STOP_SENTRY")
         with open(stop_file, "w") as f:
             f.write("STOP")
@@ -200,7 +200,7 @@ class TestToolExecutorAuditLog:
         )
         from backend.shared.security import SecurityGuard
         guard = SecurityGuard(config)
-        executor = MCPToolExecutor(guard, str(tmp_path), audit_log=audit_log)
+        executor = ToolExecutor(guard, str(tmp_path), audit_log=audit_log)
         call = ToolCall(tool_name="read_file", arguments={"path": "test.py"})
         await executor.execute(call)
         entries = audit_log.read_all()
@@ -209,8 +209,8 @@ class TestToolExecutorAuditLog:
     @pytest.mark.asyncio
     async def test_tool_executor_logs_audit_mode_block(self, security_guard, audit_log):
         """Audit mode blocks MUST be logged."""
-        from backend.mcp_tools.executor import MCPToolExecutor
-        executor = MCPToolExecutor(
+        from backend.tools.executor import ToolExecutor
+        executor = ToolExecutor(
             security_guard,
             security_guard._config.project_root,
             audit_log=audit_log,

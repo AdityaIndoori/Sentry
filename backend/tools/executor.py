@@ -48,7 +48,7 @@ def _is_tool_transient(error_str: str) -> bool:
     return any(kw in lower for kw in _TOOL_TRANSIENT_KEYWORDS)
 
 
-class MCPToolExecutor(IToolExecutor):
+class ToolExecutor(IToolExecutor):
     """Routes tool calls to implementations with security checks."""
 
     def __init__(self, security: SecurityGuard, project_root: str, audit_log: Optional[ImmutableAuditLog] = None):

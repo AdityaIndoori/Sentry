@@ -14,7 +14,7 @@ import os
 
 from backend.shared.circuit_breaker import RateLimiter
 from backend.shared.security import SecurityGuard
-from backend.mcp_tools.tool_schemas import RestartServiceArgs, pydantic_to_input_schema
+from backend.tools.tool_schemas import RestartServiceArgs, pydantic_to_input_schema
 
 logger = logging.getLogger(__name__)
 

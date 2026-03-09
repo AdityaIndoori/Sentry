@@ -7,7 +7,7 @@ the runtime validation update automatically.
 
 Usage:
   - Tool.definition() calls `schema.model_json_schema()` for input_schema
-  - MCPToolExecutor validates args with `schema.model_validate(args)` before execution
+  - ToolExecutor validates args with `schema.model_validate(args)` before execution
 """
 
 from pydantic import BaseModel, Field

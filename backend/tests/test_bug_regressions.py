@@ -145,12 +145,12 @@ class TestBugFix14_DisabledBlocksAll:
     async def test_disabled_blocks_read_only_tool(self):
         from backend.shared.config import SecurityConfig, SentryMode
         from backend.shared.security import SecurityGuard
-        from backend.mcp_tools.executor import MCPToolExecutor
+        from backend.tools.executor import ToolExecutor
 
         with tempfile.TemporaryDirectory() as tmp:
             config = SecurityConfig(mode=SentryMode.DISABLED, project_root=tmp)
             guard = SecurityGuard(config)
-            executor = MCPToolExecutor(guard, tmp)
+            executor = ToolExecutor(guard, tmp)
             result = await executor.execute(
                 ToolCall(tool_name="read_file", arguments={"path": "test.txt"})
             )
@@ -161,12 +161,12 @@ class TestBugFix14_DisabledBlocksAll:
     async def test_disabled_blocks_active_tool(self):
         from backend.shared.config import SecurityConfig, SentryMode
         from backend.shared.security import SecurityGuard
-        from backend.mcp_tools.executor import MCPToolExecutor
+        from backend.tools.executor import ToolExecutor
 
         with tempfile.TemporaryDirectory() as tmp:
             config = SecurityConfig(mode=SentryMode.DISABLED, project_root=tmp)
             guard = SecurityGuard(config)
-            executor = MCPToolExecutor(guard, tmp)
+            executor = ToolExecutor(guard, tmp)
             result = await executor.execute(
                 ToolCall(tool_name="apply_patch", arguments={"file_path": "a.py", "diff": "x"})
             )
@@ -214,12 +214,12 @@ class TestBugFix10_AuditModeEnforcedCentrally:
     async def test_audit_blocks_apply_patch_at_executor(self):
         from backend.shared.config import SecurityConfig, SentryMode
         from backend.shared.security import SecurityGuard
-        from backend.mcp_tools.executor import MCPToolExecutor
+        from backend.tools.executor import ToolExecutor
 
         with tempfile.TemporaryDirectory() as tmp:
             config = SecurityConfig(mode=SentryMode.AUDIT, project_root=tmp)
             guard = SecurityGuard(config)
-            executor = MCPToolExecutor(guard, tmp)
+            executor = ToolExecutor(guard, tmp)
             result = await executor.execute(
                 ToolCall(tool_name="apply_patch", arguments={"file_path": "a.py", "diff": "x"})
             )
@@ -230,7 +230,7 @@ class TestBugFix10_AuditModeEnforcedCentrally:
     async def test_audit_allows_read_only_tools(self):
         from backend.shared.config import SecurityConfig, SentryMode
         from backend.shared.security import SecurityGuard
-        from backend.mcp_tools.executor import MCPToolExecutor
+        from backend.tools.executor import ToolExecutor
 
         with tempfile.TemporaryDirectory() as tmp:
             # Create a file to read
@@ -238,7 +238,7 @@ class TestBugFix10_AuditModeEnforcedCentrally:
                 f.write("hello")
             config = SecurityConfig(mode=SentryMode.AUDIT, project_root=tmp)
             guard = SecurityGuard(config)
-            executor = MCPToolExecutor(guard, tmp)
+            executor = ToolExecutor(guard, tmp)
             result = await executor.execute(
                 ToolCall(tool_name="read_file", arguments={"path": "test.txt"})
             )

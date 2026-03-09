@@ -1,5 +1,5 @@
 """
-Read-only MCP tools - Safe operations that don't modify system state.
+Read-only tools - Safe operations that don't modify system state.
 Implements: read_file, grep_search, fetch_docs
 """
 
@@ -11,7 +11,7 @@ from typing import Optional
 import aiohttp
 
 from backend.shared.security import SecurityGuard
-from backend.mcp_tools.tool_schemas import (
+from backend.tools.tool_schemas import (
     ReadFileArgs, GrepSearchArgs, FetchDocsArgs, pydantic_to_input_schema,
 )
 

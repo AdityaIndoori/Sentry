@@ -14,16 +14,16 @@ from backend.shared.security import SecurityGuard
 from backend.shared.circuit_breaker import RateLimiter
 from backend.shared.models import ToolCall, ToolCategory, ToolResult
 from backend.shared.config import SecurityConfig, SentryMode
-from backend.mcp_tools.read_only_tools import ReadFileTool, GrepSearchTool
-from backend.mcp_tools.active_tools import RunDiagnosticsTool
-from backend.mcp_tools.restart_tool import RestartServiceTool
-from backend.mcp_tools.tool_schemas import (
+from backend.tools.read_only_tools import ReadFileTool, GrepSearchTool
+from backend.tools.active_tools import RunDiagnosticsTool
+from backend.tools.restart_tool import RestartServiceTool
+from backend.tools.tool_schemas import (
     ReadFileArgs, GrepSearchArgs, FetchDocsArgs,
     RunDiagnosticsArgs, ApplyPatchArgs, RestartServiceArgs,
     pydantic_to_input_schema, TOOL_ARG_MODELS,
 )
-from backend.mcp_tools.executor import (
-    MCPToolExecutor, _is_tool_transient,
+from backend.tools.executor import (
+    ToolExecutor, _is_tool_transient,
     TOOL_MAX_RETRIES, TOOL_TIMEOUT_SECONDS,
 )
 
@@ -299,7 +299,7 @@ class TestIsToolTransient:
 
 
 # ===========================================================================
-# Hardening tests: MCPToolExecutor — arg validation, empty output, retry
+# Hardening tests: ToolExecutor — arg validation, empty output, retry
 # ===========================================================================
 
 class TestExecutorArgValidation:
@@ -307,7 +307,7 @@ class TestExecutorArgValidation:
 
     @pytest.fixture
     def executor(self, security_guard, project_root):
-        return MCPToolExecutor(security_guard, project_root)
+        return ToolExecutor(security_guard, project_root)
 
     @pytest.mark.asyncio
     async def test_valid_args_pass_validation(self, executor):
@@ -349,7 +349,7 @@ class TestExecutorEmptyOutputRejection:
     @pytest.mark.asyncio
     async def test_success_with_empty_output_demoted(self, security_guard, project_root):
         """Tool returning success=True but empty output should be demoted to failure."""
-        executor = MCPToolExecutor(security_guard, project_root)
+        executor = ToolExecutor(security_guard, project_root)
 
         # Patch the read_file tool to return success but empty output
         async def _mock_execute(**kwargs):
@@ -365,7 +365,7 @@ class TestExecutorEmptyOutputRejection:
     @pytest.mark.asyncio
     async def test_audit_only_with_short_output_not_demoted(self, security_guard, project_root):
         """Audit-only results legitimately have short output — should NOT be demoted."""
-        executor = MCPToolExecutor(security_guard, project_root)
+        executor = ToolExecutor(security_guard, project_root)
 
         # run_diagnostics in AUDIT mode returns audit_only=True
         tc = ToolCall(
@@ -385,7 +385,7 @@ class TestExecutorRetryOnTransient:
     @pytest.mark.asyncio
     async def test_retries_on_transient_then_succeeds(self, security_guard, project_root):
         """Transient error on first attempt, success on second."""
-        executor = MCPToolExecutor(security_guard, project_root)
+        executor = ToolExecutor(security_guard, project_root)
         call_count = 0
 
         async def _mock_execute(**kwargs):
@@ -397,7 +397,7 @@ class TestExecutorRetryOnTransient:
 
         executor._read_file.execute = _mock_execute
 
-        with patch("backend.mcp_tools.executor.asyncio.sleep", new_callable=AsyncMock):
+        with patch("backend.tools.executor.asyncio.sleep", new_callable=AsyncMock):
             tc = ToolCall(tool_name="read_file", arguments={"path": "config/db.py"})
             result = await executor.execute(tc)
 
@@ -407,7 +407,7 @@ class TestExecutorRetryOnTransient:
     @pytest.mark.asyncio
     async def test_permanent_error_no_retry(self, security_guard, project_root):
         """Permanent errors should fail immediately without retrying."""
-        executor = MCPToolExecutor(security_guard, project_root)
+        executor = ToolExecutor(security_guard, project_root)
         call_count = 0
 
         async def _mock_execute(**kwargs):
@@ -427,7 +427,7 @@ class TestExecutorRetryOnTransient:
     @pytest.mark.asyncio
     async def test_type_error_no_retry(self, security_guard, project_root):
         """TypeError (bad args) should fail immediately — it's permanent."""
-        executor = MCPToolExecutor(security_guard, project_root)
+        executor = ToolExecutor(security_guard, project_root)
 
         async def _mock_execute(**kwargs):
             raise TypeError("execute() got an unexpected keyword argument")
@@ -443,7 +443,7 @@ class TestExecutorRetryOnTransient:
     @pytest.mark.asyncio
     async def test_all_retries_exhausted(self, security_guard, project_root):
         """All retry attempts fail with transient errors."""
-        executor = MCPToolExecutor(security_guard, project_root)
+        executor = ToolExecutor(security_guard, project_root)
         call_count = 0
 
         async def _mock_execute(**kwargs):
@@ -453,7 +453,7 @@ class TestExecutorRetryOnTransient:
 
         executor._read_file.execute = _mock_execute
 
-        with patch("backend.mcp_tools.executor.asyncio.sleep", new_callable=AsyncMock):
+        with patch("backend.tools.executor.asyncio.sleep", new_callable=AsyncMock):
             tc = ToolCall(tool_name="read_file", arguments={"path": "config/db.py"})
             result = await executor.execute(tc)
 
@@ -473,7 +473,7 @@ class TestExecutorDisabledAndStopModes:
             project_root=project_root,
         )
         guard = SecurityGuard(config)
-        executor = MCPToolExecutor(guard, project_root)
+        executor = ToolExecutor(guard, project_root)
 
         tc = ToolCall(tool_name="read_file", arguments={"path": "config/db.py"})
         result = await executor.execute(tc)
@@ -490,7 +490,7 @@ class TestExecutorDisabledAndStopModes:
             project_root=project_root,
         )
         guard = SecurityGuard(config)
-        executor = MCPToolExecutor(guard, project_root)
+        executor = ToolExecutor(guard, project_root)
 
         # Create the stop file
         with open(stop_path, "w") as f:
@@ -509,12 +509,12 @@ class TestExecutorToolDefinitions:
     """Tests for get_tool_definitions() returning all 6 tools."""
 
     def test_returns_six_definitions(self, security_guard, project_root):
-        executor = MCPToolExecutor(security_guard, project_root)
+        executor = ToolExecutor(security_guard, project_root)
         defs = executor.get_tool_definitions()
         assert len(defs) == 6
 
     def test_all_definitions_have_required_fields(self, security_guard, project_root):
-        executor = MCPToolExecutor(security_guard, project_root)
+        executor = ToolExecutor(security_guard, project_root)
         for defn in executor.get_tool_definitions():
             assert "name" in defn
             assert "description" in defn
@@ -522,7 +522,7 @@ class TestExecutorToolDefinitions:
             assert defn["input_schema"]["type"] == "object"
 
     def test_definition_names_match_tool_map(self, security_guard, project_root):
-        executor = MCPToolExecutor(security_guard, project_root)
+        executor = ToolExecutor(security_guard, project_root)
         def_names = {d["name"] for d in executor.get_tool_definitions()}
         expected = {"read_file", "grep_search", "fetch_docs",
                     "run_diagnostics", "apply_patch", "restart_service"}
@@ -533,7 +533,7 @@ class TestExecutorReadOnlyToolDefinitions:
     """Tests for get_read_only_tool_definitions() — Diagnosis agent must NOT get write tools."""
 
     def test_returns_only_read_only_tools(self, security_guard, project_root):
-        executor = MCPToolExecutor(security_guard, project_root)
+        executor = ToolExecutor(security_guard, project_root)
         defs = executor.get_read_only_tool_definitions()
         names = {d["name"] for d in defs}
         assert "read_file" in names
@@ -545,12 +545,12 @@ class TestExecutorReadOnlyToolDefinitions:
         assert "run_diagnostics" not in names
 
     def test_read_only_count(self, security_guard, project_root):
-        executor = MCPToolExecutor(security_guard, project_root)
+        executor = ToolExecutor(security_guard, project_root)
         defs = executor.get_read_only_tool_definitions()
         assert len(defs) == 3  # read_file, grep_search, fetch_docs
 
     def test_read_only_definitions_have_required_fields(self, security_guard, project_root):
-        executor = MCPToolExecutor(security_guard, project_root)
+        executor = ToolExecutor(security_guard, project_root)
         for defn in executor.get_read_only_tool_definitions():
             assert "name" in defn
             assert "description" in defn
@@ -558,7 +558,7 @@ class TestExecutorReadOnlyToolDefinitions:
 
     def test_full_definitions_still_include_all(self, security_guard, project_root):
         """get_tool_definitions() must still return all 6 tools."""
-        executor = MCPToolExecutor(security_guard, project_root)
+        executor = ToolExecutor(security_guard, project_root)
         all_defs = executor.get_tool_definitions()
         ro_defs = executor.get_read_only_tool_definitions()
         assert len(all_defs) == 6
@@ -568,7 +568,7 @@ class TestExecutorRemediationToolDefinitions:
     """Tests for get_remediation_tool_definitions() — only read_file + active tools."""
 
     def test_returns_only_remediation_tools(self, security_guard, project_root):
-        executor = MCPToolExecutor(security_guard, project_root)
+        executor = ToolExecutor(security_guard, project_root)
         defs = executor.get_remediation_tool_definitions()
         names = {d["name"] for d in defs}
         assert "apply_patch" in names
@@ -580,12 +580,12 @@ class TestExecutorRemediationToolDefinitions:
         assert "run_diagnostics" not in names
 
     def test_remediation_count(self, security_guard, project_root):
-        executor = MCPToolExecutor(security_guard, project_root)
+        executor = ToolExecutor(security_guard, project_root)
         defs = executor.get_remediation_tool_definitions()
         assert len(defs) == 3  # read_file, apply_patch, restart_service
 
     def test_remediation_definitions_have_required_fields(self, security_guard, project_root):
-        executor = MCPToolExecutor(security_guard, project_root)
+        executor = ToolExecutor(security_guard, project_root)
         for defn in executor.get_remediation_tool_definitions():
             assert "name" in defn
             assert "description" in defn
@@ -601,7 +601,7 @@ class TestFetchDocsTool:
 
     @pytest.fixture
     def tool(self, security_guard):
-        from backend.mcp_tools.read_only_tools import FetchDocsTool
+        from backend.tools.read_only_tools import FetchDocsTool
         return FetchDocsTool(security_guard)
 
     @pytest.mark.asyncio
@@ -623,7 +623,7 @@ class TestFetchDocsTool:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("backend.mcp_tools.read_only_tools.aiohttp.ClientSession",
+        with patch("backend.tools.read_only_tools.aiohttp.ClientSession",
                     return_value=mock_session):
             result = await tool.execute("https://docs.python.org/3/tutorial")
             assert result["success"] is True
@@ -641,7 +641,7 @@ class TestFetchDocsTool:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("backend.mcp_tools.read_only_tools.aiohttp.ClientSession",
+        with patch("backend.tools.read_only_tools.aiohttp.ClientSession",
                     return_value=mock_session):
             result = await tool.execute("https://docs.python.org/missing")
             assert result["success"] is False
@@ -655,13 +655,13 @@ class TestFetchDocsTool:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("backend.mcp_tools.read_only_tools.aiohttp.ClientSession",
+        with patch("backend.tools.read_only_tools.aiohttp.ClientSession",
                     return_value=mock_session):
             result = await tool.execute("https://docs.python.org/timeout")
             assert result["success"] is False
 
     def test_definition(self):
-        from backend.mcp_tools.read_only_tools import FetchDocsTool
+        from backend.tools.read_only_tools import FetchDocsTool
         defn = FetchDocsTool.definition()
         assert defn["name"] == "fetch_docs"
         assert "input_schema" in defn
@@ -790,7 +790,7 @@ class TestExecutorTimeout:
 
     @pytest.mark.asyncio
     async def test_executor_timeout(self, security_guard, project_root):
-        executor = MCPToolExecutor(security_guard, project_root)
+        executor = ToolExecutor(security_guard, project_root)
 
         async def _slow_execute(**kwargs):
             # Use a Future that never resolves so the mock on asyncio.sleep
@@ -799,8 +799,8 @@ class TestExecutorTimeout:
 
         executor._read_file.execute = _slow_execute
 
-        with patch("backend.mcp_tools.executor.TOOL_TIMEOUT_SECONDS", 0.01), \
-             patch("backend.mcp_tools.executor.asyncio.sleep", new_callable=AsyncMock):
+        with patch("backend.tools.executor.TOOL_TIMEOUT_SECONDS", 0.01), \
+             patch("backend.tools.executor.asyncio.sleep", new_callable=AsyncMock):
             tc = ToolCall(tool_name="read_file", arguments={"path": "config/db.py"})
             result = await executor.execute(tc)
 

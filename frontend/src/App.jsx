@@ -776,7 +776,7 @@ function ToolsPanel({ tools }) {
   const active = tools.tools.filter(t => !['read_file', 'grep_search', 'fetch_docs'].includes(t.name))
 
   return <Card>
-    <SectionTitle icon="🔧">MCP Tools</SectionTitle>
+    <SectionTitle icon="🔧">Tools</SectionTitle>
     {[{ label: 'Read-Only (Safe)', items: readonly, color: c.green },
       { label: 'Active (Requires Permission)', items: active, color: c.orange }].map(group => (
       group.items.length > 0 && <div key={group.label} style={{ marginBottom: '12px' }}>

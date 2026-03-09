@@ -11,7 +11,7 @@ import shutil
 import tempfile
 
 from backend.shared.security import SecurityGuard
-from backend.mcp_tools.tool_schemas import ApplyPatchArgs, pydantic_to_input_schema
+from backend.tools.tool_schemas import ApplyPatchArgs, pydantic_to_input_schema
 
 logger = logging.getLogger(__name__)
 

@@ -1,5 +1,5 @@
 """
-Active MCP tools - Operations that modify system state.
+Active tools - Operations that modify system state.
 Requires ACTIVE mode. In AUDIT mode, logs intent only.
 """
 
@@ -10,7 +10,7 @@ import shutil
 
 from backend.shared.circuit_breaker import RateLimiter
 from backend.shared.security import SecurityGuard
-from backend.mcp_tools.tool_schemas import RunDiagnosticsArgs, pydantic_to_input_schema
+from backend.tools.tool_schemas import RunDiagnosticsArgs, pydantic_to_input_schema
 
 logger = logging.getLogger(__name__)
 

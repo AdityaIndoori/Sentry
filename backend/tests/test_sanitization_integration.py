@@ -132,13 +132,13 @@ class TestAPITriggerSanitization:
 # ═══════════════════════════════════════════════════════════════
 
 class TestToolExecutorSanitization:
-    """Verify MCPToolExecutor sanitizes string arguments."""
+    """Verify ToolExecutor sanitizes string arguments."""
 
     @pytest.mark.asyncio
     async def test_tool_executor_sanitizes_string_args(self, active_security_guard):
         """All string arguments in tool calls MUST be sanitized."""
-        from backend.mcp_tools.executor import MCPToolExecutor
-        executor = MCPToolExecutor(
+        from backend.tools.executor import ToolExecutor
+        executor = ToolExecutor(
             active_security_guard,
             active_security_guard._config.project_root,
         )
@@ -161,7 +161,7 @@ class TestReadFileToolSanitization:
     @pytest.mark.asyncio
     async def test_read_file_sanitizes_path(self, active_security_guard):
         """read_file MUST sanitize path before use."""
-        from backend.mcp_tools.read_only_tools import ReadFileTool
+        from backend.tools.read_only_tools import ReadFileTool
         tool = ReadFileTool(active_security_guard, active_security_guard._config.project_root)
         result = await tool.execute(path="config/db.py; rm -rf /")
         # Should either fail validation or have sanitized the path
@@ -175,7 +175,7 @@ class TestGrepToolSanitization:
     @pytest.mark.asyncio
     async def test_grep_sanitizes_query(self, active_security_guard):
         """grep_search MUST sanitize query before use."""
-        from backend.mcp_tools.read_only_tools import GrepSearchTool
+        from backend.tools.read_only_tools import GrepSearchTool
         tool = GrepSearchTool(active_security_guard, active_security_guard._config.project_root)
         result = await tool.execute(query="error; $(evil)", path=".")
         # Should not contain dangerous shell chars in the operation
@@ -188,7 +188,7 @@ class TestDiagnosticsToolSanitization:
     @pytest.mark.asyncio
     async def test_diagnostics_sanitizes_command(self, active_security_guard):
         """run_diagnostics MUST sanitize command input."""
-        from backend.mcp_tools.active_tools import RunDiagnosticsTool
+        from backend.tools.active_tools import RunDiagnosticsTool
         tool = RunDiagnosticsTool(active_security_guard)
         result = await tool.execute(command="ps aux; rm -rf /")
         # The semicolon should be stripped by sanitization
@@ -202,7 +202,7 @@ class TestRestartToolSanitization:
     @pytest.mark.asyncio
     async def test_restart_uses_env_not_user_input(self):
         """restart_service takes no user input — command comes from env."""
-        from backend.mcp_tools.restart_tool import RestartServiceTool
+        from backend.tools.restart_tool import RestartServiceTool
         from backend.shared.circuit_breaker import RateLimiter
         config = SecurityConfig(mode=SentryMode.AUDIT)
         guard = SecurityGuard(config)
