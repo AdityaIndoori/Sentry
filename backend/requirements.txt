@@ -21,6 +21,11 @@ greenlet>=3.0
 langgraph>=0.2.0
 langchain-core>=0.3.0
 
+# P2.3b — Prometheus metrics (OSS observability). Optional at import
+# time: backend/shared/metrics.py no-ops when this isn't installed so
+# dev machines without the full production toolchain stay green.
+prometheus-client>=0.20,<0.22
+
 # Testing
 pytest==8.3.0
 pytest-asyncio==0.24.0

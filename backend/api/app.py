@@ -268,8 +268,38 @@ def _register_routes(app: FastAPI) -> None:
     top of this file.
     """
 
+    # ──────────────────────────────────────────────────────────────
+    # P2.3b: Prometheus /metrics endpoint
+    # ──────────────────────────────────────────────────────────────
+
+    @app.get("/metrics")
+    async def metrics_endpoint():
+        """Prometheus text-exposition endpoint.
+
+        Open (no auth) — matches the ecosystem norm where a sidecar or
+        service-mesh policy guards the ``/metrics`` port. Returns:
+
+        * ``200 text/plain; version=0.0.4`` — Prometheus scrape payload.
+        * ``503`` — ``prometheus_client`` not installed. Dev machines
+          that don't pip-install the full production requirements hit
+          this path; the metric helpers in :mod:`backend.shared.metrics`
+          are still safe no-ops everywhere.
+        """
+        from fastapi.responses import Response
+        from backend.shared import metrics as _metrics
+
+        try:
+            body, content_type = _metrics.render_metrics()
+        except RuntimeError as exc:
+            return JSONResponse(
+                status_code=503,
+                content={"error": str(exc), "hint": "pip install prometheus-client"},
+            )
+        return Response(content=body, media_type=content_type)
+
     @app.get("/api/health")
     async def health():
+
         """Liveness probe — the process is alive enough to answer.
 
         Intentionally shallow: no dep checks, no auth, no DB query.

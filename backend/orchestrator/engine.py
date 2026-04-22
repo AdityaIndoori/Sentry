@@ -39,6 +39,7 @@ from backend.shared.models import (
 )
 from backend.orchestrator.graph import IncidentGraphBuilder, IncidentGraphState
 from backend.shared.audit_log import ImmutableAuditLog
+from backend.shared.metrics import inc_circuit_breaker_trip, inc_incident
 from backend.services.registry import ServiceRegistry
 
 logger = logging.getLogger(__name__)
@@ -204,6 +205,7 @@ class Orchestrator(IOrchestrator):
         """
         if self._cb.is_tripped:
             logger.warning("Circuit breaker tripped - skipping event")
+            inc_circuit_breaker_trip()
             return None
 
         # --- P1.3: fingerprint dedup ---
@@ -306,6 +308,13 @@ class Orchestrator(IOrchestrator):
             # fire an event — including the path where an exception skipped
             # the happy-path return at the ``TimeoutError`` branch above.
             self._broadcast("incident.updated", incident)
+
+            # --- P2.3b: Prometheus counter for OBS-02 ---
+            # No-op when prometheus_client is not installed.
+            try:
+                inc_incident(incident.state.value)
+            except Exception:  # pragma: no cover — defensive
+                logger.exception("metrics: inc_incident failed")
 
         return incident
 

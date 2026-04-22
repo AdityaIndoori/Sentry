@@ -1,0 +1,177 @@
+name: CI
+
+# P3.2 — Continuous Integration pipeline.
+#
+# Runs on every pull request + every push to master. Enforces:
+#
+#   * Python dep install + unit+E2E test suite (SENTRY_E2E=1)
+#   * Frontend build + vitest (when the frontend has tests)
+#   * Trivy filesystem scan for vulnerable deps
+#   * SBOM generation for the backend image (CycloneDX JSON)
+#
+# The job is green when the full pytest suite passes at the same count
+# documented in ops/E2E_TEST_CATALOG.md ("Test Scoreboard" section).
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  security-events: write   # Trivy SARIF upload
+
+jobs:
+  # ──────────────────────────────────────────────────────────────
+  # Backend: lint + type-check + tests
+  # ──────────────────────────────────────────────────────────────
+  backend:
+    name: Backend (pytest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          # Dev-only tooling used by this workflow.
+          pip install ruff==0.6.0 mypy==1.11.0
+
+      - name: Ruff (lint)
+        # Soft-fail for now; tighten to `--exit-non-zero-on-fix` after
+        # the P3.4 cleanup pass.
+        run: ruff check backend/ --output-format=github || true
+
+      - name: Mypy (typecheck)
+        # Strict-mode is a P3.4 deliverable; we run a loose pass here
+        # to catch obvious regressions without gating the PR.
+        run: mypy backend/ --ignore-missing-imports --no-strict-optional || true
+
+      - name: Pytest (unit + E2E)
+        env:
+          SENTRY_E2E: '1'
+        run: |
+          python -m pytest backend/tests/ \
+            --cov=backend --cov-report=xml --cov-report=term \
+            -q -W ignore::DeprecationWarning
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: coverage.xml
+
+  # ──────────────────────────────────────────────────────────────
+  # Frontend: build + vitest (when tests exist)
+  # ──────────────────────────────────────────────────────────────
+  frontend:
+    name: Frontend (build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+
+      - name: Lint (eslint, if configured)
+        working-directory: frontend
+        run: npm run lint --if-present
+
+      - name: Test (vitest, if configured)
+        working-directory: frontend
+        run: npm test --if-present -- --run
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+  # ──────────────────────────────────────────────────────────────
+  # Security: Trivy filesystem + image scans, SBOM
+  # ──────────────────────────────────────────────────────────────
+  security-scan:
+    name: Security (Trivy + SBOM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trivy — dependency + config scan
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          # Don't fail the build on findings yet; upload to GitHub
+          # Security tab so reviewers can triage.
+          exit-code: 0
+
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+        continue-on-error: true
+
+      - name: SBOM (Anchore / Syft)
+        uses: anchore/sbom-action@v0.17.0
+        with:
+          path: .
+          format: cyclonedx-json
+          artifact-name: sbom-cyclonedx.json
+
+  # ──────────────────────────────────────────────────────────────
+  # Docker: build the backend image so we catch Dockerfile regressions
+  # ──────────────────────────────────────────────────────────────
+  docker-build:
+    name: Docker build (backend)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          push: false
+          load: true
+          tags: sentry-backend:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy — image scan
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          image-ref: sentry-backend:ci
+          severity: CRITICAL,HIGH
+          exit-code: 0
