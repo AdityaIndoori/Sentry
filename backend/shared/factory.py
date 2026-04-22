@@ -119,6 +119,9 @@ def build_container(
         gateway=gateway,
         throttle=throttle,
         registry=registry,
+        # P1.3: pass incident persistence + timeout knob.
+        incident_repo=incident_repo,
+        orchestrator_timeout_seconds=settings.orchestrator_timeout_seconds,
     )
     watcher = LogWatcher(config.watcher)
 

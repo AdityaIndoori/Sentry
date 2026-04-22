@@ -419,15 +419,19 @@ async def test_fn23_read_file_happy_path(stack: LiveStack):
     assert "DB_HOST" in (result.output or "")
 
 
-@pytest.mark.xfail(strict=True, reason="P1.2: fingerprint-dedup not yet implemented")
 @pytest.mark.asyncio
 async def test_fn_storm_dedup(stack: LiveStack):
-    """E2E CONC-03 preview: 10 identical triggers in rapid succession yield 1 incident after dedup."""
+    """E2E CONC-03 preview: 10 identical triggers in rapid succession yield 1 incident after dedup.
+
+    Serial cousin of CONC-03 — verifies the dedup cache persists across
+    sequential calls (not just within a single ``asyncio.gather``).
+    """
     for _ in range(10):
         await stack.orchestrator.handle_event(
             LogEvent(source_file="x", line_content="ERROR: the same error")
         )
-    # With dedup: only the first should succeed
+    # With P1.3 dedup: only the first event is processed; the other 9
+    # are short-circuited.
     assert len(stack.orchestrator._resolved_incidents) == 1
 
 

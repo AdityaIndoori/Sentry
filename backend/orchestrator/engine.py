@@ -1,13 +1,34 @@
 """
-Orchestrator engine - wraps LangGraph state machine for incident resolution.
+Orchestrator engine — wraps LangGraph state machine for incident resolution.
 Implements IOrchestrator interface, delegates to LangGraph graph nodes.
+
+P1.3 upgrades
+-------------
+* **Fingerprint dedup**: every incoming event is normalized to
+  ``sha256(source|pattern|line)`` and compared against recent incidents.
+  When ``incident_repo`` is wired (P1.2 Postgres path) we consult the DB
+  with a configurable rolling window; otherwise we use an in-memory
+  fallback keyed on the same fingerprint. Dedup hits short-circuit
+  ``handle_event`` → no agent loop, no LLM spend, no new incident row.
+* **Graph timeout**: ``self._graph.ainvoke(...)`` is wrapped in
+  ``asyncio.wait_for(..., timeout=settings.orchestrator_timeout_seconds)``.
+  A runaway LLM or a stuck tool loop now terminates cleanly with
+  ``IncidentState.ESCALATED`` instead of holding the caller forever.
+* **Persistence hook**: when ``incident_repo`` is present, every state
+  transition gets persisted (create, terminal). The legacy
+  ``_active_incidents`` / ``_resolved_incidents`` in-memory views are
+  preserved so existing unit tests keep working.
 """
 
+from __future__ import annotations
+
+import asyncio
 import logging
+import time
 import uuid
 from collections import deque
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from backend.shared.circuit_breaker import CostCircuitBreaker
 from backend.shared.config import AppConfig, SentryMode
@@ -24,6 +45,10 @@ logger = logging.getLogger(__name__)
 
 # --- #4: Resolved incidents list cap (FIFO) ---
 MAX_RESOLVED_INCIDENTS = 100
+
+# --- P1.3: orchestrator runtime knobs ---
+DEFAULT_ORCH_TIMEOUT_SECONDS = 300
+DEFAULT_DEDUP_WINDOW_SECONDS = 60
 
 
 class Orchestrator(IOrchestrator):
@@ -48,6 +73,10 @@ class Orchestrator(IOrchestrator):
         gateway=None,
         throttle=None,
         registry=None,
+        *,
+        incident_repo: Optional[Any] = None,  # IncidentRepository; optional keyword
+        orchestrator_timeout_seconds: int = DEFAULT_ORCH_TIMEOUT_SECONDS,
+        dedup_window_seconds: int = DEFAULT_DEDUP_WINDOW_SECONDS,
     ):
         self._config = config
         self._llm = llm
@@ -59,9 +88,19 @@ class Orchestrator(IOrchestrator):
         self._gateway = gateway
         self._throttle = throttle
         self._registry = registry
+        self._incident_repo = incident_repo
+        self._orch_timeout = orchestrator_timeout_seconds
+        self._dedup_window = dedup_window_seconds
         self._active_incidents: dict[str, Incident] = {}
         # Use deque with maxlen so FIFO trimming is O(1) and correct by construction.
         self._resolved_incidents: deque[Incident] = deque(maxlen=MAX_RESOLVED_INCIDENTS)
+
+        # --- P1.3 in-memory dedup cache ---
+        # Maps fingerprint -> monotonic-clock timestamp of last accepted event.
+        # Serves the `incident_repo is None` path and is trimmed lazily on
+        # every `handle_event` to keep memory bounded.
+        self._recent_fingerprints: dict[str, float] = {}
+        self._dedup_lock = asyncio.Lock()
 
         # Load Service Awareness Layer — built from .env paths, no YAML needed
         self._service_registry = ServiceRegistry(config)
@@ -80,15 +119,98 @@ class Orchestrator(IOrchestrator):
         )
         self._graph = builder.build()
 
+    # ------------------------------------------------------------------
+    # P1.3 fingerprint dedup
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _compute_event_fingerprint(event: LogEvent) -> str:
+        """Compute the dedup fingerprint for a log event.
+
+        Mirrors ``backend.persistence.repositories.incident_repo.compute_fingerprint``;
+        we re-implement the handful of lines here so the orchestrator's
+        in-memory path doesn't have to import the persistence package
+        (which pulls in SQLAlchemy for no benefit when DATABASE_URL is
+        empty).
+        """
+        import hashlib
+        src = event.source_file or ""
+        pat = event.matched_pattern or ""
+        line = (event.line_content or "").strip()
+        material = f"{src}|{pat}|{line}".encode("utf-8", errors="replace")
+        return hashlib.sha256(material).hexdigest()
+
+    async def _is_duplicate(self, fingerprint: str) -> bool:
+        """Return True if this fingerprint has been seen within the dedup window.
+
+        Uses ``incident_repo`` when available (for correctness across
+        restarts); falls back to an in-memory dict otherwise. Either
+        way the window is ``self._dedup_window`` seconds.
+        """
+        if not fingerprint:
+            return False
+
+        # Persisted path — authoritative across process restarts.
+        if self._incident_repo is not None:
+            try:
+                return await self._incident_repo.dedupe_fingerprint(
+                    fingerprint, window_seconds=self._dedup_window
+                )
+            except Exception:  # pragma: no cover
+                logger.exception("dedup: incident_repo.dedupe_fingerprint failed")
+                return False
+
+        # In-memory fallback.
+        now = time.monotonic()
+        async with self._dedup_lock:
+            # Trim stale entries opportunistically so the dict doesn't grow
+            # unboundedly. ``window*2`` keeps the cache warm enough for
+            # bursty workloads without running a background janitor.
+            cutoff = now - (self._dedup_window * 2)
+            if self._recent_fingerprints:
+                # Copy keys first because we mutate in the loop.
+                stale = [fp for fp, ts in self._recent_fingerprints.items() if ts < cutoff]
+                for fp in stale:
+                    self._recent_fingerprints.pop(fp, None)
+
+            last = self._recent_fingerprints.get(fingerprint)
+            if last is not None and (now - last) < self._dedup_window:
+                return True
+            # Record this observation — even if the caller ultimately
+            # rejects the event for a different reason, we still don't
+            # want to re-accept the identical line one second later.
+            self._recent_fingerprints[fingerprint] = now
+            return False
+
+    # ------------------------------------------------------------------
+    # Main event handler
+    # ------------------------------------------------------------------
+
     async def handle_event(self, event: LogEvent) -> Optional[Incident]:
         """Process a log event through the LangGraph state machine.
 
-        Terminal states (RESOLVED, IDLE, ESCALATED) are ALWAYS removed from
-        the `_active_incidents` dict in the finally block — this prevents
-        the ESCALATED-leak bug where failed incidents accumulated forever.
+        Terminal states (RESOLVED, IDLE, ESCALATED) are ALWAYS removed
+        from the ``_active_incidents`` dict in the finally block — this
+        prevents the ESCALATED-leak bug where failed incidents
+        accumulated forever.
+
+        P1.3 additions
+        --------------
+        * Fingerprint dedup short-circuits before any LLM spend.
+        * ``asyncio.wait_for`` around the graph guards against hung
+          agents.
         """
         if self._cb.is_tripped:
             logger.warning("Circuit breaker tripped - skipping event")
+            return None
+
+        # --- P1.3: fingerprint dedup ---
+        fingerprint = self._compute_event_fingerprint(event)
+        if await self._is_duplicate(fingerprint):
+            logger.info(
+                "dedup: skipping event (fingerprint seen within %ds): %s",
+                self._dedup_window, (event.line_content or "")[:80],
+            )
             return None
 
         incident_id = f"INC-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
@@ -98,6 +220,13 @@ class Orchestrator(IOrchestrator):
             log_events=[event.to_dict()],
         )
         self._active_incidents[incident_id] = incident
+
+        # --- P1.3: persist on creation (Postgres path only) ---
+        if self._incident_repo is not None:
+            try:
+                await self._incident_repo.save(incident, fingerprint=fingerprint)
+            except Exception:  # pragma: no cover
+                logger.exception("incident_repo.save failed at creation")
 
         try:
             # Build service context from .env paths
@@ -111,8 +240,33 @@ class Orchestrator(IOrchestrator):
                 "tool_loop_count": 0,
             }
 
-            # ainvoke runs the graph to completion
-            final_state = await self._graph.ainvoke(initial_state)
+            # --- P1.3: wrap in asyncio.wait_for ---
+            # ainvoke runs the graph to completion; if it takes longer
+            # than the configured timeout we escalate cleanly.
+            try:
+                final_state = await asyncio.wait_for(
+                    self._graph.ainvoke(initial_state),
+                    timeout=self._orch_timeout,
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    "Orchestrator timeout after %ds for %s — escalating",
+                    self._orch_timeout, incident_id,
+                )
+                incident.state = IncidentState.ESCALATED
+                if self._audit_log:
+                    try:
+                        self._audit_log.log_action(
+                            agent_id="orchestrator",
+                            action="orchestrator_timeout",
+                            detail=f"incident={incident_id} timeout={self._orch_timeout}s",
+                            result="escalated",
+                        )
+                    except Exception:  # pragma: no cover
+                        logger.exception("audit log of timeout failed")
+                # Skip the usual save-to-memory; proceed to finally.
+                return incident
+
             incident = final_state["incident"]
 
             if incident.state == IncidentState.RESOLVED:
@@ -134,6 +288,13 @@ class Orchestrator(IOrchestrator):
             # forever and bloated /api/status. Now all terminal states are removed
             # unconditionally — whether we got there by success, error, or escalation.
             self._active_incidents.pop(incident_id, None)
+
+            # --- P1.3: persist the terminal transition ---
+            if self._incident_repo is not None:
+                try:
+                    await self._incident_repo.save(incident, fingerprint=fingerprint)
+                except Exception:  # pragma: no cover
+                    logger.exception("incident_repo.save failed at terminal state")
 
         return incident
 

@@ -43,17 +43,26 @@ async def test_conc02_concurrent_triggers_produce_distinct_incidents(stack: Live
     assert len(stack.orchestrator._active_incidents) == 0
 
 
-@pytest.mark.xfail(strict=True, reason="P1.3: fingerprint-dedup not yet implemented")
 @pytest.mark.asyncio
 async def test_conc03_log_storm_deduplicates(stack: LiveStack):
-    """E2E CONC-03: 50 identical log lines → 1 incident."""
+    """E2E CONC-03: 50 identical log lines → 1 incident.
+
+    P1.3 fingerprint-dedup: the first event is processed normally and
+    resolves; the remaining 49 hit
+    ``Orchestrator._is_duplicate`` within the 60-second window and
+    short-circuit before any LLM spend. Net result is exactly one
+    resolved incident.
+    """
     async def fire():
         return await stack.orchestrator.handle_event(
             LogEvent(source_file="same", line_content="ERROR: IDENTICAL")
         )
 
-    await asyncio.gather(*(fire() for _ in range(50)))
-    # With dedup in place:
+    results = await asyncio.gather(*(fire() for _ in range(50)))
+    # Exactly one resolved incident — the first shot through; the
+    # other 49 returned None (dedup hit).
+    non_none = [r for r in results if r is not None]
+    assert len(non_none) == 1, f"expected 1 non-dedup result, got {len(non_none)}"
     assert len(stack.orchestrator._resolved_incidents) == 1
 
 
@@ -93,11 +102,63 @@ async def test_conc06_concurrent_circuit_breaker_record_usage(stack: LiveStack):
     assert status["output_tokens"] == 400
 
 
-@pytest.mark.xfail(strict=True, reason="P1.3: asyncio.wait_for around graph.ainvoke not yet wired")
 @pytest.mark.asyncio
-async def test_conc08_orchestrator_timeout_escalates():
-    """E2E CONC-08: graph invocation that exceeds the timeout is ESCALATED, not hung."""
-    # After P1.3 ships, this test will install a slow FakeLLMClient that
-    # sleeps 10 s while ORCHESTRATOR_TIMEOUT_SECONDS=1, then asserts the
-    # incident finishes as ESCALATED in ~1 s.
-    assert False
+async def test_conc08_orchestrator_timeout_escalates(live_stack_factory):
+    """E2E CONC-08: graph invocation that exceeds the timeout is ESCALATED, not hung.
+
+    P1.3: ``Orchestrator.handle_event`` wraps ``graph.ainvoke`` in
+    ``asyncio.wait_for(..., timeout=orchestrator_timeout_seconds)``.
+    We install a Triage-phase LLM handler that sleeps 5 s while the
+    orchestrator timeout is 1 s, then assert the incident finished as
+    ESCALATED in well under 2 s (not the full 5).
+    """
+    import time as _time
+
+    # Slow LLM: Triage stalls for 5 seconds, all other prompts resolve.
+    async def slow_triage(prompt, effort, tools):
+        await asyncio.sleep(5.0)
+        return {
+            "text": "SEVERITY: high\nVERDICT: INVESTIGATE\nSUMMARY: too-slow",
+            "tool_calls": [],
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+        }
+
+    from backend.tests.e2e.fake_llm import (
+        FakeLLMClient, Rule,
+        DEFAULT_TRIAGE, DEFAULT_DETECTIVE, DEFAULT_SURGEON,
+        DEFAULT_VALIDATOR_RESOLVED,
+    )
+
+    llm = FakeLLMClient([
+        Rule(
+            predicate=lambda p, e, t: "Triage this production error" in (p or ""),
+            response={}, side_effect=slow_triage, name="triage-slow",
+        ),
+        Rule.when_prompt_contains("Validator Agent for Sentry",
+                                  response=DEFAULT_VALIDATOR_RESOLVED),
+        Rule.when_prompt_contains("Apply a fix using the available tools",
+                                  response=DEFAULT_SURGEON),
+        Rule.when_prompt_contains("You are diagnosing a server incident",
+                                  response=DEFAULT_DETECTIVE),
+        Rule.default(response=DEFAULT_DETECTIVE),
+    ])
+    stack = live_stack_factory(llm=llm)
+
+    # Dial the orchestrator timeout down to 1 second for this test.
+    stack.orchestrator._orch_timeout = 1
+
+    event = LogEvent(source_file="x", line_content="ERROR: hung agent")
+
+    t0 = _time.monotonic()
+    incident = await stack.orchestrator.handle_event(event)
+    elapsed = _time.monotonic() - t0
+
+    from backend.shared.models import IncidentState
+    assert incident is not None
+    assert incident.state == IncidentState.ESCALATED, (
+        f"expected ESCALATED after timeout, got {incident.state}"
+    )
+    # Must have cut the wait short — nowhere near the 5 s triage sleep.
+    assert elapsed < 2.5, f"handle_event took {elapsed:.2f}s (timeout wrapper didn't fire)"
+    # Active dict drained.
+    assert len(stack.orchestrator._active_incidents) == 0

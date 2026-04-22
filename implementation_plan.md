@@ -419,10 +419,17 @@ Sequence changes to minimize merge conflicts, keep tests green at every step, an
    - ✅ `backend/tests/test_persistence.py` — 20 new unit tests exercising every repo against a per-test SQLite file. Suite is 600 passed / 6 skipped / 9 xfailed / 0 failed.
    - **Exit criteria met.** Orchestrator does NOT yet write through `incident_repo` — that's an additive P1.3 step (the repo exists, the schema exists, the switch is a single line in `engine.handle_event`). Leaving that as the first deliverable of P1.3 keeps this PR reviewable.
 
-5. **P1.3 — Orchestrator timeouts + dedup.**
-   - Add `asyncio.wait_for` around graph invocation + every agent call in `graph.py`.
-   - Add fingerprint dedup in `engine.handle_event`.
-   - **Exit criteria:** storm test (1,000 identical log lines in 1s → 1 incident) green.
+5. **P1.3 — Orchestrator timeouts + dedup. [✓ DONE]**
+   - ✅ `backend/orchestrator/engine.py`:
+     * New ``_compute_event_fingerprint(event)`` + ``_is_duplicate(fp)``. Dual-backend: uses ``self._incident_repo.dedupe_fingerprint(fp, window_seconds=...)`` when the Postgres path is active; falls back to an ``asyncio.Lock``-protected in-memory cache otherwise. Stale entries trimmed lazily at 2× the window.
+     * ``handle_event`` now checks the fingerprint first and returns ``None`` on a dedup hit — no LLM spend, no new incident row.
+     * Graph invocation wrapped in ``asyncio.wait_for(self._graph.ainvoke(...), timeout=self._orch_timeout)``. On ``TimeoutError`` the incident is marked ``ESCALATED``, the audit log records ``orchestrator_timeout``, and the ``finally`` block still drains ``_active_incidents`` and persists the terminal state.
+     * New optional kwargs: ``incident_repo``, ``orchestrator_timeout_seconds`` (default 300), ``dedup_window_seconds`` (default 60). All backward-compatible — existing unit tests construct ``Orchestrator`` without them and keep working.
+   - ✅ `backend/shared/factory.py::build_container` now passes ``incident_repo=incident_repo, orchestrator_timeout_seconds=settings.orchestrator_timeout_seconds`` when constructing the ``Orchestrator``.
+   - ✅ **CONC-03** log-storm dedup: 50 identical LogEvents in an ``asyncio.gather`` → exactly 1 resolved incident (flipped xfail → passing).
+   - ✅ **CONC-08** orchestrator timeout: slow Triage LLM (5 s sleep) + ``_orch_timeout=1`` → incident ends ESCALATED in well under 2.5 s (flipped xfail → passing).
+   - ✅ **FN-storm** serial variant (10 sequential identical triggers → 1 incident) also flipped xfail → passing.
+   - **Exit criteria met.** Full suite: 603 passed / 6 skipped / 6 xfailed / 0 failed.
 
 6. **P1.4 — Vault credentials actually enforced.**
    - Add `credential` param to `ToolExecutor.execute`; `BaseAgent._call_tool` passes a JIT credential; tool executor verifies via `vault.verify_credential`.

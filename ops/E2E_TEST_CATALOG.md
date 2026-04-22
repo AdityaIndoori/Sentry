@@ -199,7 +199,7 @@ feature in P1–P3 adds rows here.
 
 ---
 
-## Test Scoreboard (as of P1.2 completion)
+## Test Scoreboard (as of P1.3 completion)
 
 Last full run command:
 
@@ -207,7 +207,16 @@ Last full run command:
 cmd /v:on /c "set SENTRY_E2E=1&& python -m pytest backend/tests/ --no-cov -q"
 ```
 
-Combined unit + E2E: **600 passed / 6 skipped / 9 xfailed / 0 failed**.
+Combined unit + E2E: **603 passed / 6 skipped / 6 xfailed / 0 failed**.
+
+P1.3 delta: **three xfails flipped to passing** —
+
+* **CONC-03** — 50 identical log lines in an `asyncio.gather` now collapse
+  to exactly 1 resolved incident (fingerprint dedup).
+* **CONC-08** — slow-Triage LLM + `orchestrator_timeout_seconds=1` ends
+  the incident as ESCALATED in < 2.5 s (was previously hung indefinitely).
+* **FN-storm-dedup** — serial variant of CONC-03 proves the dedup cache
+  persists across sequential calls, not just within one `gather`.
 
 P1.2 delta: **+20 new unit tests** under `backend/tests/test_persistence.py`
 exercising `PostgresMemoryRepo`, `PostgresAuditLog`, `IncidentRepository`
