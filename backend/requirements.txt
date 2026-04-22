@@ -4,8 +4,19 @@ anthropic==0.39.0
 openai>=1.30.0,<2.0.0
 aiohttp==3.10.0
 pydantic<3.0.0
+pydantic-settings>=2.0.0,<3.0.0
 python-dotenv==1.0.1
 gitpython>=3.1.0
+
+# P1.2 — Persistence. SQLAlchemy 2.0 async + asyncpg (Postgres) /
+# aiosqlite (dev + CI). Alembic for migrations. Greenlet is
+# required by SQLAlchemy async under the hood.
+sqlalchemy[asyncio]>=2.0.29,<3
+asyncpg>=0.29,<0.31
+aiosqlite>=0.20,<1
+alembic>=1.13,<2
+greenlet>=3.0
+
 # LangGraph / LangChain for structured orchestration
 langgraph>=0.2.0
 langchain-core>=0.3.0

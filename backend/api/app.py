@@ -1,7 +1,31 @@
 """
-FastAPI application - API gateway for Sentry dashboard.
-Provides REST endpoints for the frontend UI.
+FastAPI application — API gateway for Sentry dashboard.
+
+P1.1 refactor
+-------------
+The legacy module-level globals (``_orchestrator``, ``_watcher``,
+``_config``, ``_vault``, ``_gateway``, ``_audit_log``, ``_throttle``,
+``_registry``, ``_watcher_task``, ``_watcher_ctl_lock``) are retained as
+**backwards-compat shims** so the existing ~500 unit tests that
+``patch("backend.api.app._orchestrator", ...)`` keep working unchanged.
+
+The real composition root is now :func:`backend.shared.factory.build_container`
+which returns a :class:`backend.shared.container.ServiceContainer`.
+``create_app(container=None)`` attaches the container to
+``app.state.container`` and every endpoint first tries to pull its
+dependencies from there, falling back to the globals only if no
+container is attached (i.e. in the legacy unit-test harness).
+
+The module-level ``app`` is still exported so ``from backend.api.app import app``
+continues to work — it's created by ``create_app()`` without a
+pre-built container; the container is assembled inside ``lifespan()``
+and also written back to the globals.
+
+P1.2 will drop the globals once all call-sites have been migrated to
+``Depends(get_container)``.
 """
+
+from __future__ import annotations
 
 import asyncio
 import contextvars
@@ -10,28 +34,21 @@ import os
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from backend.shared.circuit_breaker import CostCircuitBreaker
-from backend.shared.config import load_config, LLMProvider
+from backend.shared.config import LLMProvider
+from backend.shared.container import ServiceContainer
+from backend.shared.factory import build_container
 from backend.shared.models import LogEvent
 from backend.shared.security import SecurityGuard
-from backend.shared.vault import LocalVault, AgentRole
-from backend.shared.ai_gateway import AIGateway
-from backend.shared.audit_log import ImmutableAuditLog
-from backend.shared.agent_throttle import AgentThrottle
-from backend.shared.security import SecurityGuard as _SecurityGuardForSanitize
-from backend.shared.tool_registry import TrustedToolRegistry, create_default_registry
-from backend.memory.store import JSONMemoryStore
-from backend.tools.executor import ToolExecutor
-from backend.orchestrator.engine import Orchestrator
-from backend.orchestrator.llm_client import create_llm_client
-from backend.watcher.log_watcher import LogWatcher
+from backend.shared.settings import get_settings
+from backend.shared.vault import AgentRole
+from backend.shared.tool_registry import create_default_registry
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +58,7 @@ _request_id_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("request_i
 
 class RequestIDFilter(logging.Filter):
     """Injects the current request ID into every log record."""
+
     def filter(self, record):
         record.request_id = _request_id_ctx.get("-")
         return True
@@ -48,6 +66,7 @@ class RequestIDFilter(logging.Filter):
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
     """Generates a unique request ID, stores it in ContextVar, adds to response header."""
+
     async def dispatch(self, request: Request, call_next):
         request_id = uuid.uuid4().hex[:12]
         _request_id_ctx.set(request_id)
@@ -56,48 +75,97 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         return response
 
 
-# Global references set during lifespan
-_orchestrator: Orchestrator = None
-_watcher: LogWatcher = None
-_config = None
-_vault = None
-_gateway = None
-_audit_log = None
-_throttle = None
-_registry = None
-_watcher_task: object = None  # asyncio.Task for the watcher->orchestrator loop
+# ─── Legacy module-level globals (backwards-compat shim) ────────────────────
+# These are populated by lifespan() and are the fallback source of
+# truth for endpoint handlers when no ServiceContainer has been
+# attached to ``app.state.container``. Unit tests continue to
+# ``patch("backend.api.app._orchestrator", ...)`` etc. in the usual
+# way; the patched value wins over the container because when these
+# globals are being patched by tests, the lifespan has not run, so
+# ``app.state.container`` is not present.
+#
+# TODO(P1.2): delete these globals once all tests move to the
+# container-based fixtures in ``backend.tests.e2e.conftest``.
+_orchestrator = None  # type: ignore[var-annotated]
+_watcher = None  # type: ignore[var-annotated]
+_config = None  # type: ignore[var-annotated]
+_vault = None  # type: ignore[var-annotated]
+_gateway = None  # type: ignore[var-annotated]
+_audit_log = None  # type: ignore[var-annotated]
+_throttle = None  # type: ignore[var-annotated]
+_registry = None  # type: ignore[var-annotated]
+_watcher_task: Optional[asyncio.Task] = None
+_watcher_ctl_lock: asyncio.Lock = asyncio.Lock()
 
+
+# ─── Helpers to read services from either the container or the globals ─────
+
+def _get_container(request: Request) -> Optional[ServiceContainer]:
+    """Return the ServiceContainer attached to this app, if any."""
+    try:
+        return request.app.state.container  # type: ignore[union-attr]
+    except AttributeError:
+        return None
+
+
+def _pick(request: Request, attr: str, global_name: str):
+    """
+    Pull ``attr`` off the container if one is attached; otherwise fall
+    back to the module global ``global_name``. This is the only place
+    that knows about the legacy dual path.
+    """
+    container = _get_container(request)
+    if container is not None:
+        val = getattr(container, attr, None)
+        if val is not None:
+            return val
+    # Read the module global LIVE so that unittest.mock.patch still works.
+    return globals().get(global_name)
+
+
+# ─── Lifespan ───────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # pragma: no cover
-    """Application startup and shutdown."""
+    """Application startup and shutdown.
+
+    Builds a ServiceContainer via the factory, attaches it to
+    ``app.state.container``, and mirrors the individual services to the
+    legacy module globals for backwards compatibility.
+    """
     global _orchestrator, _watcher, _config
+    global _vault, _gateway, _audit_log, _throttle, _registry
 
-    _config = load_config()
-    log_level = getattr(logging, _config.log_level)
+    settings = get_settings()
+    container = build_container(settings)
+    app.state.container = container
+
+    # Legacy globals (backwards compat — see note above).
+    _orchestrator = container.orchestrator
+    _watcher = container.watcher
+    _config = container.config
+    _vault = container.vault
+    _gateway = container.gateway
+    _audit_log = container.audit_log
+    _throttle = container.throttle
+    _registry = container.registry
+
+    # Install request-id logging filter.
+    log_level = getattr(logging, container.config.log_level, logging.INFO)
     log_format = "%(asctime)s %(levelname)s [%(request_id)s] %(name)s:%(message)s"
-
-    # Install the RequestID filter and formatter on ALL loggers
     rid_filter = RequestIDFilter()
     formatter = logging.Formatter(log_format)
 
-    # Configure root logger
     root_logger = logging.getLogger()
     root_logger.setLevel(log_level)
     root_logger.addFilter(rid_filter)
-
-    # If root has no handlers yet, add a console handler
     if not root_logger.handlers:
         console = logging.StreamHandler()
         console.setLevel(log_level)
         root_logger.addHandler(console)
-
-    # Apply our formatter + filter to ALL existing handlers on root
     for handler in root_logger.handlers:
         handler.setFormatter(formatter)
         handler.addFilter(rid_filter)
-
-    # Also install filter + formatter on uvicorn loggers (they don't propagate)
     for uv_logger_name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
         uv_log = logging.getLogger(uv_logger_name)
         uv_log.addFilter(rid_filter)
@@ -105,77 +173,29 @@ async def lifespan(app: FastAPI):  # pragma: no cover
             handler.setFormatter(formatter)
             handler.addFilter(rid_filter)
 
-    # Add timestamped file handler if LOG_FILE_DIR is set
-    if _config.log_file_dir:
-        os.makedirs(_config.log_file_dir, exist_ok=True)
+    if container.config.log_file_dir:
+        os.makedirs(container.config.log_file_dir, exist_ok=True)
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        log_file = os.path.join(_config.log_file_dir, f"backend_{timestamp}.log")
+        log_file = os.path.join(container.config.log_file_dir, f"backend_{timestamp}.log")
         file_handler = logging.FileHandler(log_file, encoding="utf-8")
         file_handler.setLevel(log_level)
         file_handler.setFormatter(formatter)
         file_handler.addFilter(rid_filter)
-        # Attach to root logger (catches backend.* loggers)
         logging.getLogger().addHandler(file_handler)
-        # Attach to uvicorn loggers (they don't propagate to root by default)
         for uv_logger_name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
             logging.getLogger(uv_logger_name).addHandler(file_handler)
         logger.info(f"Logging to file: {log_file}")
 
-    global _vault, _gateway, _audit_log, _throttle, _registry
-
-    security = SecurityGuard(_config.security)
-    memory = JSONMemoryStore(_config.memory)
-
-    # Zero Trust security dependencies — now wired into the production runtime
-    _vault = LocalVault()
-    _gateway = AIGateway()
-    _audit_log = ImmutableAuditLog(_config.audit_log_path)
-    _throttle = AgentThrottle(max_actions_per_minute=5)
-    _registry = create_default_registry()
-
-    # Pass audit_log and registry to ToolExecutor for defense-in-depth
-    tools = ToolExecutor(security, _config.security.project_root, audit_log=_audit_log, registry=_registry)
-    llm = create_llm_client(_config)
-    cb = CostCircuitBreaker(
-        max_cost_usd=_config.security.max_cost_per_10min_usd
-    )
-
-    _orchestrator = Orchestrator(
-        _config, llm, tools, memory, cb,
-        audit_log=_audit_log,
-        vault=_vault,
-        gateway=_gateway,
-        throttle=_throttle,
-        registry=_registry,
-    )
-    _watcher = LogWatcher(_config.watcher)
-
-    logger.info(f"Sentry started in {_config.security.mode.value} mode")
-    yield
-    if _watcher:
-        await _watcher.stop()
-    logger.info("Sentry shutdown")
+    logger.info(f"Sentry started in {container.config.security.mode.value} mode")
+    try:
+        yield
+    finally:
+        await container.shutdown()
+        logger.info("Sentry shutdown")
 
 
-app = FastAPI(
-    title="Sentry",
-    description="Self-Healing Server Monitor",
-    version="1.0.0",
-    lifespan=lifespan,
-)
+# ─── Pydantic request bodies ────────────────────────────────────────────────
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
-    allow_credentials=True,
-    allow_methods=["GET", "POST"],
-    allow_headers=["*", "X-Request-ID"],
-    expose_headers=["X-Request-ID"],
-)
-app.add_middleware(RequestIDMiddleware)
-
-
-# --- Pydantic models for request validation ---
 
 class TriggerEventRequest(BaseModel):
     source: str = "manual"
@@ -186,99 +206,292 @@ class ModeChangeRequest(BaseModel):
     mode: str  # ACTIVE, AUDIT, DISABLED
 
 
-# --- API Endpoints ---
-
-@app.get("/api/health")
-async def health():
-    return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+# ─── App factory ────────────────────────────────────────────────────────────
 
 
-@app.get("/api/status")
-async def get_status():
-    if not _orchestrator:
-        raise HTTPException(503, "Orchestrator not initialized")
-    status = await _orchestrator.get_status()
-    status["watcher_running"] = _watcher._running if _watcher else False
-    return status
+def create_app(container: Optional[ServiceContainer] = None) -> FastAPI:
+    """Build a FastAPI app, optionally pre-wired to an existing ServiceContainer.
 
+    * When ``container`` is provided (E2E tests, alternate deployments),
+      it is attached to ``app.state.container`` immediately and no
+      lifespan-driven build occurs. Callers are responsible for
+      calling ``container.shutdown()`` when done.
+    * When ``container`` is ``None`` (the default production path), the
+      lifespan context manager builds one from :func:`get_settings`.
+    """
+    if container is not None:
+        # Alternate path: caller supplies the container. We skip the
+        # lifespan so we don't try to re-build one.
+        app = FastAPI(
+            title="Sentry",
+            description="Self-Healing Server Monitor",
+            version="1.0.0",
+        )
+        app.state.container = container
+    else:
+        app = FastAPI(
+            title="Sentry",
+            description="Self-Healing Server Monitor",
+            version="1.0.0",
+            lifespan=lifespan,
+        )
 
-@app.get("/api/incidents")
-async def get_incidents():
-    if not _orchestrator:
-        raise HTTPException(503, "Not ready")
-    active = await _orchestrator.get_active_incidents()
-    return {
-        "active": [i.to_dict() for i in active],
-        "resolved": [i.to_dict() for i in _orchestrator._resolved_incidents[-20:]],
-    }
-
-
-@app.get("/api/incidents/{incident_id}")
-async def get_incident_detail(incident_id: str):
-    """Get detailed incident info including full activity log."""
-    if not _orchestrator:
-        raise HTTPException(503, "Not ready")
-    # Check active incidents first
-    if incident_id in _orchestrator._active_incidents:
-        return _orchestrator._active_incidents[incident_id].to_dict()
-    # Check resolved incidents
-    for inc in _orchestrator._resolved_incidents:
-        if inc.id == incident_id:
-            return inc.to_dict()
-    raise HTTPException(404, f"Incident {incident_id} not found")
-
-
-@app.post("/api/trigger")
-async def trigger_event(req: TriggerEventRequest):
-    if not _orchestrator:
-        raise HTTPException(503, "Not ready")
-
-    # Sanitize user input before creating the log event
-    sanitized_message = req.message
-    if _config:
-        guard = SecurityGuard(_config.security)
-        sanitized_message = guard.sanitize_input(req.message)
-
-    event = LogEvent(
-        source_file=req.source,
-        line_content=sanitized_message,
-        timestamp=datetime.now(timezone.utc),
-        matched_pattern="manual",
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:3000", "http://localhost:5173"],
+        allow_credentials=True,
+        allow_methods=["GET", "POST"],
+        allow_headers=["*", "X-Request-ID"],
+        expose_headers=["X-Request-ID"],
     )
-    incident = await _orchestrator.handle_event(event)
-    if incident:
-        return {"incident": incident.to_dict()}
-    return {"incident": None, "message": "Circuit breaker active or event ignored"}
+    app.add_middleware(RequestIDMiddleware)
+
+    _register_routes(app)
+    return app
 
 
-@app.get("/api/memory")
-async def get_memory():
-    if not _orchestrator:
-        raise HTTPException(503, "Not ready")
-    store = _orchestrator._memory
-    entries = await store.load()
-    return {
-        "count": len(entries),
-        "entries": [e.to_dict() for e in entries[-20:]],
-        "fingerprint": await store.get_fingerprint(),
-    }
+# ─── Route registration ─────────────────────────────────────────────────────
 
 
-@app.get("/api/tools")
-async def get_tools():
-    if not _orchestrator:
-        raise HTTPException(503, "Not ready")
-    return {"tools": _orchestrator._tools.get_tool_definitions()}
+def _register_routes(app: FastAPI) -> None:
+    """Register every API route on ``app``.
+
+    Handlers use :func:`_pick` to read services from either the attached
+    container or the legacy module globals — see the P1.1 note at the
+    top of this file.
+    """
+
+    @app.get("/api/health")
+    async def health():
+        return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+    @app.get("/api/status")
+    async def get_status(request: Request):
+        orch = _pick(request, "orchestrator", "_orchestrator")
+        watcher = _pick(request, "watcher", "_watcher")
+        if not orch:
+            raise HTTPException(503, "Orchestrator not initialized")
+        status = await orch.get_status()
+        status["watcher_running"] = watcher._running if watcher else False
+        return status
+
+    @app.get("/api/incidents")
+    async def get_incidents(request: Request):
+        orch = _pick(request, "orchestrator", "_orchestrator")
+        if not orch:
+            raise HTTPException(503, "Not ready")
+        active = await orch.get_active_incidents()
+        resolved_list = list(orch._resolved_incidents)[-20:]
+        return {
+            "active": [i.to_dict() for i in active],
+            "resolved": [i.to_dict() for i in resolved_list],
+        }
+
+    @app.get("/api/incidents/{incident_id}")
+    async def get_incident_detail(incident_id: str, request: Request):
+        orch = _pick(request, "orchestrator", "_orchestrator")
+        if not orch:
+            raise HTTPException(503, "Not ready")
+        if incident_id in orch._active_incidents:
+            return orch._active_incidents[incident_id].to_dict()
+        for inc in orch._resolved_incidents:
+            if inc.id == incident_id:
+                return inc.to_dict()
+        raise HTTPException(404, f"Incident {incident_id} not found")
+
+    @app.post("/api/trigger")
+    async def trigger_event(req: TriggerEventRequest, request: Request):
+        orch = _pick(request, "orchestrator", "_orchestrator")
+        cfg = _pick(request, "config", "_config")
+        if not orch:
+            raise HTTPException(503, "Not ready")
+
+        sanitized_message = req.message
+        if cfg:
+            guard = SecurityGuard(cfg.security)
+            sanitized_message = guard.sanitize_input(req.message)
+
+        event = LogEvent(
+            source_file=req.source,
+            line_content=sanitized_message,
+            timestamp=datetime.now(timezone.utc),
+            matched_pattern="manual",
+        )
+        incident = await orch.handle_event(event)
+        if incident:
+            return {"incident": incident.to_dict()}
+        return {"incident": None, "message": "Circuit breaker active or event ignored"}
+
+    @app.get("/api/memory")
+    async def get_memory(request: Request):
+        orch = _pick(request, "orchestrator", "_orchestrator")
+        if not orch:
+            raise HTTPException(503, "Not ready")
+        store = orch._memory
+        entries = await store.load()
+        return {
+            "count": len(entries),
+            "entries": [e.to_dict() for e in entries[-20:]],
+            "fingerprint": await store.get_fingerprint(),
+        }
+
+    @app.get("/api/tools")
+    async def get_tools(request: Request):
+        orch = _pick(request, "orchestrator", "_orchestrator")
+        if not orch:
+            raise HTTPException(503, "Not ready")
+        return {"tools": orch._tools.get_tool_definitions()}
+
+    @app.post("/api/watcher/start")
+    async def start_watcher(request: Request):
+        global _watcher_task
+        watcher = _pick(request, "watcher", "_watcher")
+        if not watcher:
+            raise HTTPException(503, "Not ready")
+        container = _get_container(request)
+        lock = container.watcher_ctl_lock if container is not None else _watcher_ctl_lock
+        async with lock:
+            if watcher._running:
+                return {"status": "already_running"}
+            await watcher.start()
+            orch = _pick(request, "orchestrator", "_orchestrator")
+            existing_task = (
+                container.watcher_task if container is not None else _watcher_task
+            )
+            if existing_task and not existing_task.done():
+                existing_task.cancel()
+            task = asyncio.create_task(
+                _watcher_event_loop(watcher, orch),
+                name="sentry-watcher-dispatch",
+            )
+            if container is not None:
+                container.watcher_task = task
+            else:
+                _watcher_task = task
+            return {"status": "started"}
+
+    @app.post("/api/watcher/stop")
+    async def stop_watcher(request: Request):
+        global _watcher_task
+        watcher = _pick(request, "watcher", "_watcher")
+        if not watcher:
+            raise HTTPException(503, "Not ready")
+        container = _get_container(request)
+        lock = container.watcher_ctl_lock if container is not None else _watcher_ctl_lock
+        async with lock:
+            await watcher.stop()
+            existing_task = (
+                container.watcher_task if container is not None else _watcher_task
+            )
+            if existing_task and not existing_task.done():
+                existing_task.cancel()
+            if container is not None:
+                container.watcher_task = None
+            else:
+                _watcher_task = None
+            return {"status": "stopped"}
+
+    @app.get("/api/config")
+    async def get_config(request: Request):
+        cfg = _pick(request, "config", "_config")
+        if not cfg:
+            raise HTTPException(503, "Not ready")
+
+        provider = cfg.llm_provider
+        if provider == LLMProvider.BEDROCK_GATEWAY:
+            model = (
+                cfg.bedrock_gateway.model
+                if hasattr(cfg, "bedrock_gateway") and cfg.bedrock_gateway
+                else "unknown"
+            )
+        else:
+            model = (
+                cfg.anthropic.model
+                if hasattr(cfg, "anthropic") and cfg.anthropic
+                else "unknown"
+            )
+
+        return {
+            "llm_provider": provider.value,
+            "model": model,
+            "mode": cfg.security.mode.value,
+            "service_source_path": cfg.security.project_root,
+            "watch_paths": cfg.watcher.watch_paths,
+            "poll_interval": cfg.watcher.poll_interval_seconds,
+            "max_cost_10min": cfg.security.max_cost_per_10min_usd,
+            "max_retries": cfg.security.max_retries,
+            "restart_cooldown": cfg.security.restart_cooldown_seconds,
+            "log_level": cfg.log_level,
+            "environment": cfg.environment,
+        }
+
+    @app.get("/api/security")
+    async def get_security_status(request: Request):
+        cfg = _pick(request, "config", "_config")
+        if not cfg:
+            raise HTTPException(503, "Not ready")
+
+        orch = _pick(request, "orchestrator", "_orchestrator")
+        vault = _pick(request, "vault", "_vault")
+        gateway = _pick(request, "gateway", "_gateway")
+        audit_log = _pick(request, "audit_log", "_audit_log")
+        throttle = _pick(request, "throttle", "_throttle")
+        registry = _pick(request, "registry", "_registry") or create_default_registry()
+
+        agent_roles = {}
+        for role in AgentRole:
+            tools = registry.get_tools_for_role(role)
+            agent_roles[role.value] = {
+                "tools_allowed": tools,
+                "tool_count": len(tools),
+            }
+
+        stop_file_exists = os.path.exists(cfg.security.stop_file_path)
+
+        return {
+            "zero_trust": {
+                "vault": "active" if vault and not vault.is_killed else "inactive",
+                "ai_gateway": "active" if gateway else "inactive",
+                "audit_log": "active" if audit_log else "inactive",
+                "agent_throttle": "active" if throttle else "inactive",
+                "tool_registry": "active" if registry else "inactive",
+            },
+            "mode": cfg.security.mode.value,
+            "stop_file_active": stop_file_exists,
+            "agent_roles": agent_roles,
+            "security_layers": [
+                {"name": "NHI Vault", "status": "OK", "description": "Non-Human Identity credential management"},
+                {"name": "AI Gateway", "status": "OK", "description": "Prompt injection and PII leak detection"},
+                {"name": "Immutable Audit Log", "status": "OK", "description": "Hash-chained tamper-evident logging"},
+                {"name": "Agent Throttle", "status": "OK", "description": "Per-agent action rate limiting"},
+                {"name": "Tool Registry", "status": "OK", "description": "Role-based tool access control"},
+                {"name": "Path Validation", "status": "OK", "description": "No directory traversal allowed"},
+                {"name": "Command Whitelist", "status": "OK", "description": "Only approved commands executable"},
+                {"name": "Input Sanitization", "status": "OK", "description": "Shell injection prevention"},
+                {"name": "Cost Circuit Breaker", "status": "OK", "description": "Max $" + str(cfg.security.max_cost_per_10min_usd) + "/10min"},
+                {"name": "Rate Limiter", "status": "OK", "description": "Restart cooldown: " + str(cfg.security.restart_cooldown_seconds) + "s"},
+            ],
+            "circuit_breaker": orch._cb.get_status() if orch else {},
+        }
 
 
-async def _watcher_event_loop():  # pragma: no cover
-    """Background task: reads watcher events and feeds them to the orchestrator."""
+# ─── Watcher event dispatch ─────────────────────────────────────────────────
+
+
+async def _watcher_event_loop(watcher=None, orchestrator=None):  # pragma: no cover
+    """Background task: reads watcher events and feeds them to the orchestrator.
+
+    Defaults to the module globals when arguments are omitted, so existing
+    tests that patch ``_watcher`` / ``_orchestrator`` keep working.
+    """
+    w = watcher if watcher is not None else _watcher
+    orch = orchestrator if orchestrator is not None else _orchestrator
     logger.info("Watcher event loop started")
     try:
-        async for event in _watcher.events():
+        async for event in w.events():
             logger.info(f"Watcher detected: {event.line_content[:80]}")
             try:
-                await _orchestrator.handle_event(event)
+                await orch.handle_event(event)
             except Exception as e:
                 logger.error(f"Orchestrator error processing event: {e}")
     except asyncio.CancelledError:
@@ -288,100 +501,7 @@ async def _watcher_event_loop():  # pragma: no cover
     logger.info("Watcher event loop ended")
 
 
-@app.post("/api/watcher/start")
-async def start_watcher():
-    global _watcher_task
-    if not _watcher:
-        raise HTTPException(503, "Not ready")
-    if _watcher._running:
-        return {"status": "already_running"}
-    await _watcher.start()
-    _watcher_task = asyncio.create_task(_watcher_event_loop())
-    return {"status": "started"}
-
-
-@app.post("/api/watcher/stop")
-async def stop_watcher():
-    global _watcher_task
-    if not _watcher:
-        raise HTTPException(503, "Not ready")
-    await _watcher.stop()
-    if _watcher_task and not _watcher_task.done():
-        _watcher_task.cancel()
-        _watcher_task = None
-    return {"status": "stopped"}
-
-
-@app.get("/api/config")
-async def get_config():
-    """Return safe configuration values for the dashboard (no API keys)."""
-    if not _config:
-        raise HTTPException(503, "Not ready")
-
-    # Determine provider and model
-    provider = _config.llm_provider
-    if provider == LLMProvider.BEDROCK_GATEWAY:
-        model = _config.bedrock_gateway.model if hasattr(_config, 'bedrock_gateway') and _config.bedrock_gateway else "unknown"
-    else:
-        model = _config.anthropic.model if hasattr(_config, 'anthropic') and _config.anthropic else "unknown"
-
-    return {
-        "llm_provider": provider.value,
-        "model": model,
-        "mode": _config.security.mode.value,
-        "service_source_path": _config.security.project_root,
-        "watch_paths": _config.watcher.watch_paths,
-        "poll_interval": _config.watcher.poll_interval_seconds,
-        "max_cost_10min": _config.security.max_cost_per_10min_usd,
-        "max_retries": _config.security.max_retries,
-        "restart_cooldown": _config.security.restart_cooldown_seconds,
-        "log_level": _config.log_level,
-        "environment": _config.environment,
-    }
-
-
-@app.get("/api/security")
-async def get_security_status():
-    """Zero Trust security posture dashboard data."""
-    import os
-
-    if not _config:
-        raise HTTPException(503, "Not ready")
-
-    registry = create_default_registry()
-
-    agent_roles = {}
-    for role in AgentRole:
-        tools = registry.get_tools_for_role(role)
-        agent_roles[role.value] = {
-            "tools_allowed": tools,
-            "tool_count": len(tools),
-        }
-
-    stop_file_exists = os.path.exists(_config.security.stop_file_path)
-
-    return {
-        "zero_trust": {
-            "vault": "active" if _vault and not _vault.is_killed else "inactive",
-            "ai_gateway": "active" if _gateway else "inactive",
-            "audit_log": "active" if _audit_log else "inactive",
-            "agent_throttle": "active" if _throttle else "inactive",
-            "tool_registry": "active" if _registry else "inactive",
-        },
-        "mode": _config.security.mode.value,
-        "stop_file_active": stop_file_exists,
-        "agent_roles": agent_roles,
-        "security_layers": [
-            {"name": "NHI Vault", "status": "OK", "description": "Non-Human Identity credential management"},
-            {"name": "AI Gateway", "status": "OK", "description": "Prompt injection and PII leak detection"},
-            {"name": "Immutable Audit Log", "status": "OK", "description": "Hash-chained tamper-evident logging"},
-            {"name": "Agent Throttle", "status": "OK", "description": "Per-agent action rate limiting"},
-            {"name": "Tool Registry", "status": "OK", "description": "Role-based tool access control"},
-            {"name": "Path Validation", "status": "OK", "description": "No directory traversal allowed"},
-            {"name": "Command Whitelist", "status": "OK", "description": "Only approved commands executable"},
-            {"name": "Input Sanitization", "status": "OK", "description": "Shell injection prevention"},
-            {"name": "Cost Circuit Breaker", "status": "OK", "description": "Max $" + str(_config.security.max_cost_per_10min_usd) + "/10min"},
-            {"name": "Rate Limiter", "status": "OK", "description": "Restart cooldown: " + str(_config.security.restart_cooldown_seconds) + "s"},
-        ],
-        "circuit_breaker": _orchestrator._cb.get_status() if _orchestrator else {},
-    }
+# ─── Module-level app instance (import-compatibility) ───────────────────────
+# ``from backend.api.app import app`` must continue to work. This instance
+# uses the standard lifespan path.
+app = create_app()
