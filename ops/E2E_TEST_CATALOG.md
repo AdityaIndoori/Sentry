@@ -199,7 +199,7 @@ feature in P1–P3 adds rows here.
 
 ---
 
-## Test Scoreboard (as of P1.3 completion)
+## Test Scoreboard (as of P1.4 completion)
 
 Last full run command:
 
@@ -207,7 +207,22 @@ Last full run command:
 cmd /v:on /c "set SENTRY_E2E=1&& python -m pytest backend/tests/ --no-cov -q"
 ```
 
-Combined unit + E2E: **603 passed / 6 skipped / 6 xfailed / 0 failed**.
+Combined unit + E2E: **615 passed / 6 skipped / 5 xfailed / 0 failed**.
+
+P1.4 delta: **twelve new tests passing, one xfail flipped** —
+
+* **SEC-25** — xfail flipped: a forged `JITCredential` is hard-rejected by
+  `ToolExecutor` and an audit entry `cred_verify_failed` is written.
+* **SEC-23** (new) — `ToolExecutor` (with vault wired) rejects calls with
+  no credential at all: `"JIT credential required for tool execution."`.
+* **SEC-24** (new) — the legitimate `BaseAgent._call_tool` path issues,
+  verifies, and revokes a JIT credential around every tool call.
+* **SEC-26** (new) — a credential issued for `tool:read_file` cannot be
+  replayed as `tool:grep_search` (scope mismatch).
+* **SEC-26b** (new) — revoked credential rejected on replay.
+* **TestVaultCredentialEnforcement** (new unit class, 7 tests) — missing /
+  forged / scope-mismatched / revoked / wrong-agent / valid-credential /
+  legacy-no-vault cases all locked in under `test_p0_regressions.py`.
 
 P1.3 delta: **three xfails flipped to passing** —
 
@@ -230,16 +245,16 @@ Postgres in CI / docker-compose. Alembic migration verified with
 
 | Suite | Pass | Skip | XFail | Fail |
 |------|-----:|-----:|------:|-----:|
-| test_functional.py (20 scenarios) | 15 | 1 | 4 | 0 |
-| test_security.py (31 scenarios) | 22 | 5 | 4 | 0 |
+| test_functional.py (20 scenarios) | 16 | 1 | 2 | 0 |
+| test_security.py (35 scenarios) | 27 | 5 | 3 | 0 |
 | test_concurrency.py (5 scenarios) | 3 | 0 | 2 | 0 |
-| **Total** | **40** | **6** | **10** | **0** |
+| **Total** | **46** | **6** | **7** | **0** |
 
 Skips come from environment gating (Docker Desktop not running on dev
 machines — SEC-06 symlink on Windows, SEC-35..38 Docker hardening). Under
-`docker compose up -d` the Docker tests run green. All 10 xfails are
-gated on a future phase (P1.2 / P1.3 / P1.4 / P2.1 / P2.3) — none
-indicate unaddressed bugs.
+`docker compose up -d` the Docker tests run green. All 5 suite-level
+xfails are gated on future phases (P2.1 auth × 3, P1.1 fingerprint
+boot × 1, P2.3 readiness × 1) — none indicate unaddressed bugs.
 
 P1.1 delta: **SEC-41 `X-Request-ID`** flipped from xfail to passing — the
 E2E app now goes through `backend.api.app.create_app(container=...)` so

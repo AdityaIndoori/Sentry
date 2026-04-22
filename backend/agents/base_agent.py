@@ -113,9 +113,16 @@ class BaseAgent(ABC):
 
     async def _call_tool(self, tool_name: str, arguments: dict) -> ToolResult:
         """Execute a tool. Automatically logs TOOL_CALL and TOOL_RESULT activities.
-        
+
         This is the ONLY way to execute a tool from any agent.
         Direct access to self.__tools is blocked by name mangling.
+
+        P1.4: Before invoking the executor we request a short-lived JIT
+        credential from the vault scoped specifically to ``tool:{tool_name}``,
+        pass it to the executor, and revoke it immediately after the call
+        completes (success OR failure). The ToolExecutor verifies the
+        credential against the same vault before executing — a forged or
+        replayed credential is hard-rejected at the tool boundary.
         """
         args_summary = ", ".join(f"{k}={str(v)[:50]}" for k, v in arguments.items())
         self._log_activity(
@@ -125,8 +132,37 @@ class BaseAgent(ABC):
             metadata={"tool": tool_name, "args": {k: str(v)[:100] for k, v in arguments.items()}},
         )
 
-        call = ToolCall(tool_name=tool_name, arguments=arguments)
-        result = await self.__tools.execute(call, caller_role=self._role)
+        # Issue a JIT credential for this tool call (scope = "tool:<name>").
+        # The credential has a 30-second TTL and is revoked in `finally`
+        # regardless of success. If the vault is unavailable we still
+        # proceed — this preserves behaviour for unit tests that construct
+        # ToolExecutor without a vault. When a vault IS wired, the executor
+        # will reject the call if no credential is presented.
+        credential = None
+        try:
+            credential = self._vault.issue_credential(
+                self.agent_id, scope=f"tool:{tool_name}", ttl_seconds=30,
+            )
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.warning(
+                f"Vault failed to issue credential for {self.agent_id} "
+                f"scope=tool:{tool_name}: {exc}"
+            )
+
+        try:
+            call = ToolCall(tool_name=tool_name, arguments=arguments)
+            result = await self.__tools.execute(
+                call, caller_role=self._role, credential=credential,
+            )
+        finally:
+            if credential is not None:
+                try:
+                    self._vault.revoke_credential(credential.credential_id)
+                except Exception as exc:  # pragma: no cover — defensive
+                    logger.warning(
+                        f"Vault failed to revoke credential "
+                        f"{credential.credential_id}: {exc}"
+                    )
 
         result_text = result.output or result.error or ""
         self._log_activity(

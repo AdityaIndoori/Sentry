@@ -431,10 +431,22 @@ Sequence changes to minimize merge conflicts, keep tests green at every step, an
    - ✅ **FN-storm** serial variant (10 sequential identical triggers → 1 incident) also flipped xfail → passing.
    - **Exit criteria met.** Full suite: 603 passed / 6 skipped / 6 xfailed / 0 failed.
 
-6. **P1.4 — Vault credentials actually enforced.**
-   - Add `credential` param to `ToolExecutor.execute`; `BaseAgent._call_tool` passes a JIT credential; tool executor verifies via `vault.verify_credential`.
-   - Add `credential` param (or scoped wrapper) around LLM calls similarly.
-   - **Exit criteria:** a test that forges / expires a credential causes `execute()` to return `success=False` and logs an audit entry.
+6. **P1.4 — Vault credentials actually enforced. [✓ DONE]**
+   - ✅ `backend/shared/vault.py`: `LocalVault.verify_credential(credential_id, agent_id, scope)` was already implemented — confirmed semantics (returns `False` on unknown id, revoked/expired, agent mismatch, or scope mismatch).
+   - ✅ `backend/tools/executor.py`:
+     * `ToolExecutor.__init__` now accepts optional `vault: Optional[IVault] = None`.
+     * `ToolExecutor.execute(..., credential: Optional[JITCredential] = None)`.
+     * When `self._vault is not None`, every call MUST present a vault-issued credential whose `scope == f"tool:{tool_name}"`. Missing, forged, scope-mismatched, wrong-agent, expired, or revoked credentials are hard-rejected BEFORE any other gate (AUDIT / DISABLED / STOP_SENTRY / registry ACL / validation), and an audit entry `tool_blocked` (`no_credential`) or `cred_verify_failed` is written.
+     * When `self._vault is None` the pre-P1.4 behaviour is preserved — legacy unit tests that construct `ToolExecutor(security, project_root)` without a vault remain green.
+   - ✅ `backend/agents/base_agent.py::_call_tool`:
+     * Before dispatching to the executor, issues a JIT credential via `self._vault.issue_credential(self.agent_id, scope=f"tool:{tool_name}", ttl_seconds=30)`.
+     * Passes the credential to `executor.execute(..., credential=cred)`.
+     * Revokes the credential in `finally` regardless of success — one credential per call, no replay.
+   - ✅ `backend/shared/factory.py::build_container` now wires `vault=vault` into `ToolExecutor`, so every production / E2E stack enforces credentials end-to-end.
+   - ✅ **SEC-23..26 flipped xfail → passing**: added `test_sec23_tool_without_credential_rejected`, `test_sec24_agent_path_issues_and_verifies_credential`, `test_sec25_forged_credential_rejected` (real assertion), `test_sec26_scope_mismatch_rejected`, plus `test_sec26b_revoked_credential_rejected` for replay-after-revoke.
+   - ✅ **Unit regressions**: new `TestVaultCredentialEnforcement` class in `test_p0_regressions.py` covering missing / forged / scope-mismatched / revoked / wrong-agent / valid-credential / legacy-no-vault cases — 7 focused unit tests that lock this contract in.
+   - **Exit criteria met.** Full suite: **615 passed / 6 skipped / 5 xfailed / 0 failed** (was 603/6/6/0 at P1.3).
+   - *Note on LLM-call credentials:* the original P1.4 spec also mentioned a credential wrapper around LLM calls. That stays deferred into P2.2 (secrets backend), because once secrets come from a proper secrets provider the natural place to attach a per-call scope is the `ILLMClient` wrapper that reads the API key from `ISecretsProvider`, not an orthogonal vault layer. Documented here to avoid scope creep.
 
 7. **P2.1 — Auth.**
    - `Principal`, `ApiTokenRow`, `AuthMiddleware`, `require_scope`.

@@ -17,6 +17,11 @@ These tests lock in fixes for:
       Pydantic + content validation. Malicious arguments (non-whitelisted
       commands, path traversal, bad URLs) must be hard-rejected in AUDIT
       mode, not silently "logged as audit_only=True".
+  11. P1.4 — ToolExecutor wired with a LocalVault requires a vault-issued
+      JITCredential (agent + scope match) on every execute() call. Forged,
+      scope-mismatched, wrong-agent, and revoked credentials are hard-
+      rejected at the tool boundary before any other gate runs. Legacy
+      executors constructed without a vault keep pre-P1.4 behaviour.
 """
 
 from __future__ import annotations
@@ -486,5 +491,191 @@ class TestAuditModeValidationOrdering:
         assert result.success is False
         assert result.audit_only is False
         assert "invalid arguments" in (result.error or "").lower()
+
+
+# ═══════════════════════════════════════════════════════════════
+# Fix #11 — P1.4: Vault JIT credential enforcement at tool boundary
+# ═══════════════════════════════════════════════════════════════
+#
+# Before: ToolExecutor.execute() accepted a caller_role but never
+#         required a JIT credential. Vault.issue_credential /
+#         Vault.verify_credential existed but nothing actually called
+#         them on the tool path — Zero-Trust credentials were ornamental.
+# After:  When ToolExecutor is constructed with a vault, every
+#         execute() call MUST present a JITCredential that this vault
+#         issued for this agent and scope=f"tool:{tool_name}". Forged,
+#         scope-mismatched, expired, or revoked credentials are hard-
+#         rejected at the executor boundary, before any other gate runs.
+#         ToolExecutors constructed WITHOUT a vault (legacy unit tests)
+#         are unchanged.
+
+
+from backend.shared.vault import LocalVault, JITCredential
+
+
+def _build_vault_wired_executor(tmp_path):
+    """Build a ToolExecutor wired with a real LocalVault."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(exist_ok=True)
+    (workspace / "config").mkdir(exist_ok=True)
+    (workspace / "config" / "db.py").write_text("DB_HOST = 'localhost'\n")
+
+    cfg = SecurityConfig(
+        mode=SentryMode.ACTIVE,   # avoid AUDIT short-circuit interfering
+        stop_file_path=str(tmp_path / "STOP_SENTRY"),
+        project_root=str(workspace),
+    )
+    security = SecurityGuard(cfg)
+    audit_log = ImmutableAuditLog(str(tmp_path / "audit.jsonl"))
+    registry = create_default_registry()
+    vault = LocalVault()
+    executor = ToolExecutor(
+        security, str(workspace),
+        audit_log=audit_log, registry=registry, vault=vault,
+    )
+    return executor, vault
+
+
+class TestVaultCredentialEnforcement:
+    """P1.4: the executor must hard-reject tool calls that aren't backed
+    by a valid vault-issued JIT credential."""
+
+    @pytest.mark.asyncio
+    async def test_missing_credential_rejected(self, tmp_path):
+        """credential=None must fail with a clear error — no tool runs."""
+        executor, _vault = _build_vault_wired_executor(tmp_path)
+        result = await executor.execute(
+            ToolCall(tool_name="read_file", arguments={"path": "config/db.py"}),
+            caller_role=AgentRole.DETECTIVE,
+            credential=None,
+        )
+        assert result.success is False
+        assert result.audit_only is False
+        assert "credential" in (result.error or "").lower()
+
+    @pytest.mark.asyncio
+    async def test_forged_credential_rejected(self, tmp_path):
+        """A hand-built JITCredential with no matching vault entry is rejected."""
+        import time as _time
+
+        executor, _vault = _build_vault_wired_executor(tmp_path)
+        forged = JITCredential(
+            credential_id="cred-forged-0000",
+            agent_id="detective-forged",
+            token="x" * 64,
+            scope="tool:read_file",
+            issued_at=_time.time(),
+            ttl_seconds=60,
+        )
+        result = await executor.execute(
+            ToolCall(tool_name="read_file", arguments={"path": "config/db.py"}),
+            caller_role=AgentRole.DETECTIVE,
+            credential=forged,
+        )
+        assert result.success is False
+        assert "credential" in (result.error or "").lower()
+        assert "reject" in (result.error or "").lower()
+
+    @pytest.mark.asyncio
+    async def test_scope_mismatch_rejected(self, tmp_path):
+        """A credential for tool:read_file cannot be replayed for grep_search."""
+        executor, vault = _build_vault_wired_executor(tmp_path)
+        nhi = vault.register_agent(AgentRole.DETECTIVE)
+        cred = vault.issue_credential(
+            nhi.agent_id, scope="tool:read_file", ttl_seconds=60,
+        )
+        assert cred is not None
+
+        result = await executor.execute(
+            ToolCall(tool_name="grep_search", arguments={"pattern": "x", "path": "."}),
+            caller_role=AgentRole.DETECTIVE,
+            credential=cred,
+        )
+        assert result.success is False
+        assert "credential" in (result.error or "").lower()
+
+    @pytest.mark.asyncio
+    async def test_revoked_credential_rejected(self, tmp_path):
+        """A revoked credential cannot be replayed even with the right scope."""
+        executor, vault = _build_vault_wired_executor(tmp_path)
+        nhi = vault.register_agent(AgentRole.DETECTIVE)
+        cred = vault.issue_credential(
+            nhi.agent_id, scope="tool:read_file", ttl_seconds=60,
+        )
+        assert cred is not None
+        vault.revoke_credential(cred.credential_id)
+
+        result = await executor.execute(
+            ToolCall(tool_name="read_file", arguments={"path": "config/db.py"}),
+            caller_role=AgentRole.DETECTIVE,
+            credential=cred,
+        )
+        assert result.success is False
+        assert "credential" in (result.error or "").lower()
+
+    @pytest.mark.asyncio
+    async def test_valid_credential_accepted(self, tmp_path):
+        """The legitimate agent path — issue, verify, execute — works end to end."""
+        executor, vault = _build_vault_wired_executor(tmp_path)
+        nhi = vault.register_agent(AgentRole.DETECTIVE)
+        cred = vault.issue_credential(
+            nhi.agent_id, scope="tool:read_file", ttl_seconds=60,
+        )
+        assert cred is not None
+
+        result = await executor.execute(
+            ToolCall(tool_name="read_file", arguments={"path": "config/db.py"}),
+            caller_role=AgentRole.DETECTIVE,
+            credential=cred,
+        )
+        assert result.success is True
+        assert "DB_HOST" in (result.output or "")
+
+    @pytest.mark.asyncio
+    async def test_wrong_agent_rejected(self, tmp_path):
+        """A credential issued to agent A cannot be used by agent B
+        (even with the right scope)."""
+        executor, vault = _build_vault_wired_executor(tmp_path)
+        nhi_a = vault.register_agent(AgentRole.DETECTIVE)
+        _nhi_b = vault.register_agent(AgentRole.DETECTIVE)
+        cred_a = vault.issue_credential(
+            nhi_a.agent_id, scope="tool:read_file", ttl_seconds=60,
+        )
+        assert cred_a is not None
+
+        # Tamper: swap in a different agent id while keeping the same
+        # credential_id — this is the classic "stolen credential" attack.
+        tampered = JITCredential(
+            credential_id=cred_a.credential_id,
+            agent_id="detective-someone-else",
+            token=cred_a.token,
+            scope=cred_a.scope,
+            issued_at=cred_a.issued_at,
+            ttl_seconds=cred_a.ttl_seconds,
+        )
+        result = await executor.execute(
+            ToolCall(tool_name="read_file", arguments={"path": "config/db.py"}),
+            caller_role=AgentRole.DETECTIVE,
+            credential=tampered,
+        )
+        assert result.success is False
+        assert "credential" in (result.error or "").lower()
+
+    @pytest.mark.asyncio
+    async def test_legacy_executor_without_vault_still_works(self, tmp_path):
+        """Belt & braces: ToolExecutor constructed with no vault preserves
+        the pre-P1.4 behaviour — credentials are optional."""
+        # _build_audit_mode_executor doesn't pass a vault; verify that
+        # a well-formed call still succeeds without any credential.
+        executor = _build_audit_mode_executor(tmp_path)  # AUDIT mode, no vault
+        result = await executor.execute(
+            ToolCall(tool_name="read_file", arguments={"path": "config/db.py"}),
+            caller_role=AgentRole.DETECTIVE,
+            # credential intentionally omitted
+        )
+        # read_file is READ_ONLY so AUDIT doesn't short-circuit it — it
+        # should just return the file content successfully.
+        assert result.success is True
+        assert "DB_HOST" in (result.output or "")
 
 

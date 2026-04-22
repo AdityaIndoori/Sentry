@@ -21,7 +21,7 @@ from backend.shared.models import ToolCall, ToolCategory, ToolResult
 from backend.shared.security import SecurityGuard
 from backend.shared.audit_log import ImmutableAuditLog
 from backend.shared.tool_registry import TrustedToolRegistry
-from backend.shared.vault import AgentRole
+from backend.shared.vault import AgentRole, IVault, JITCredential
 
 from .active_tools import RunDiagnosticsTool
 from .patch_tool import ApplyPatchTool
@@ -61,10 +61,12 @@ class ToolExecutor(IToolExecutor):
 
     def __init__(self, security: SecurityGuard, project_root: str,
                  audit_log: Optional[ImmutableAuditLog] = None,
-                 registry: Optional[TrustedToolRegistry] = None):
+                 registry: Optional[TrustedToolRegistry] = None,
+                 vault: Optional[IVault] = None):
         self._security = security
         self._audit_log = audit_log
         self._registry = registry
+        self._vault = vault
         self._rate_limiter = RateLimiter()
 
         # Initialize tools
@@ -149,7 +151,82 @@ class ToolExecutor(IToolExecutor):
         # operator).
         return None
 
-    async def execute(self, tool_call: ToolCall, caller_role: Optional[AgentRole] = None) -> ToolResult:
+    async def execute(
+        self,
+        tool_call: ToolCall,
+        caller_role: Optional[AgentRole] = None,
+        credential: Optional[JITCredential] = None,
+    ) -> ToolResult:
+        # --- P1.4: Zero-Trust JIT credential enforcement ---
+        #
+        # When a vault is wired, every tool invocation must present a valid
+        # JIT credential that was issued BY THE SAME VAULT for this agent
+        # and scope. This turns the credential plumbing from ornamental
+        # into mandatory: a forged or replayed credential is rejected at
+        # the executor boundary.
+        #
+        # The check is gated on ``self._vault is not None`` so legacy
+        # constructions (``ToolExecutor(security, project_root)`` in
+        # unit tests) continue to work without credentials.
+        if self._vault is not None:
+            expected_scope = f"tool:{tool_call.tool_name}"
+            agent_id_for_verify = (
+                credential.agent_id if credential is not None else None
+            )
+            credential_id_for_verify = (
+                credential.credential_id if credential is not None else None
+            )
+
+            # No credential presented at all.
+            if credential is None:
+                logger.warning(
+                    f"[VAULT] Tool '{tool_call.tool_name}' invoked without a "
+                    f"JIT credential — rejecting."
+                )
+                self._audit(
+                    "tool_blocked",
+                    f"tool={tool_call.tool_name}",
+                    "no_credential",
+                    metadata={
+                        "tool": tool_call.tool_name,
+                        "reason": "missing_credential",
+                    },
+                )
+                return ToolResult(
+                    tool_name=tool_call.tool_name,
+                    success=False,
+                    error="JIT credential required for tool execution.",
+                )
+
+            # Credential presented — verify with the vault.
+            if not self._vault.verify_credential(
+                credential_id_for_verify,
+                agent_id_for_verify,
+                expected_scope,
+            ):
+                logger.warning(
+                    f"[VAULT] Credential verification failed for tool "
+                    f"'{tool_call.tool_name}' "
+                    f"(cred_id={credential_id_for_verify}, "
+                    f"agent={agent_id_for_verify}, scope={expected_scope})"
+                )
+                self._audit(
+                    "cred_verify_failed",
+                    f"tool={tool_call.tool_name}, agent={agent_id_for_verify}",
+                    "rejected",
+                    metadata={
+                        "tool": tool_call.tool_name,
+                        "agent_id": agent_id_for_verify,
+                        "credential_id": credential_id_for_verify,
+                        "reason": "credential_rejected",
+                    },
+                )
+                return ToolResult(
+                    tool_name=tool_call.tool_name,
+                    success=False,
+                    error="JIT credential rejected by vault.",
+                )
+
         # --- Sanitize all string arguments before processing ---
         sanitized_args = {}
         for key, val in (tool_call.arguments or {}).items():

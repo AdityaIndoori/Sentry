@@ -99,6 +99,10 @@ def build_container(
         config.security.project_root,
         audit_log=audit_log,
         registry=registry,
+        # P1.4: wire the vault so the executor enforces JIT credentials.
+        # Every tool call must now present a credential issued by this
+        # same vault; forged/replayed credentials are hard-rejected.
+        vault=vault,
     )
 
     if llm_override is not None:

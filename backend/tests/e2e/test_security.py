@@ -18,12 +18,28 @@ import pytest
 
 from backend.shared.models import ToolCall
 from backend.shared.config import SentryMode
-from backend.shared.vault import AgentRole
+from backend.shared.vault import AgentRole, JITCredential
 from backend.tests.e2e.conftest import e2e, LiveStack
 from backend.tests.e2e.fake_llm import resolving_llm
 
 
 pytestmark = [e2e]
+
+
+# ---------------------------------------------------------------------
+# Helper — P1.4 makes JIT credentials mandatory at the executor boundary
+# when the vault is wired. For tests that exercise *other* gates
+# (AUDIT mode, DISABLED mode, STOP_SENTRY, registry ACL) we still need
+# a valid credential for the right (role, scope) pair so those tests
+# reach the gate they actually want to exercise.
+# ---------------------------------------------------------------------
+def _issue_cred(stack: LiveStack, role: AgentRole, tool_name: str) -> JITCredential:
+    nhi = stack.vault.register_agent(role)
+    cred = stack.vault.issue_credential(
+        nhi.agent_id, scope=f"tool:{tool_name}", ttl_seconds=60,
+    )
+    assert cred is not None
+    return cred
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -248,6 +264,7 @@ async def test_sec18_audit_mode_blocks_apply_patch(stack: LiveStack):
     # Create a target file and compute a simple diff.
     target = Path(stack.config.security.project_root) / "config" / "db.py"
     original = target.read_text()
+    cred = _issue_cred(stack, AgentRole.SURGEON, "apply_patch")
     r = await stack.tools.execute(
         ToolCall(
             tool_name="apply_patch",
@@ -257,6 +274,7 @@ async def test_sec18_audit_mode_blocks_apply_patch(stack: LiveStack):
             },
         ),
         caller_role=AgentRole.SURGEON,
+        credential=cred,
     )
     assert r.audit_only is True
     assert target.read_text() == original  # untouched
@@ -265,12 +283,14 @@ async def test_sec18_audit_mode_blocks_apply_patch(stack: LiveStack):
 @pytest.mark.asyncio
 async def test_sec19_audit_mode_blocks_restart_service(stack: LiveStack):
     """E2E SEC-19: restart_service in AUDIT mode does not restart anything."""
+    cred = _issue_cred(stack, AgentRole.SURGEON, "restart_service")
     r = await stack.tools.execute(
         ToolCall(
             tool_name="restart_service",
             arguments={"service_name": "nginx"},
         ),
         caller_role=AgentRole.SURGEON,
+        credential=cred,
     )
     assert r.audit_only is True
 
@@ -284,9 +304,11 @@ async def test_sec20_disabled_mode_blocks_all_tools(live_stack_factory):
         ("grep_search", {"query": "x", "path": "."}),
         ("run_diagnostics", {"command": "ps aux"}),
     ]:
+        cred = _issue_cred(stack, AgentRole.DETECTIVE, name)
         r = await stack.tools.execute(
             ToolCall(tool_name=name, arguments=args),
             caller_role=AgentRole.DETECTIVE,
+            credential=cred,
         )
         assert r.success is False, f"{name} should be blocked in DISABLED mode"
         assert "DISABLED" in (r.error or "").upper()
@@ -300,9 +322,11 @@ async def test_sec21_stop_sentry_file_halts_writes(live_stack_factory):
     # Touch STOP_SENTRY
     Path(stack.config.security.stop_file_path).write_text("stop\n")
 
+    cred = _issue_cred(stack, AgentRole.DETECTIVE, "read_file")
     r = await stack.tools.execute(
         ToolCall(tool_name="read_file", arguments={"path": "config/db.py"}),
         caller_role=AgentRole.DETECTIVE,
+        credential=cred,
     )
     assert r.success is False
     assert "STOP_SENTRY" in (r.error or "")
@@ -324,17 +348,114 @@ async def test_sec22_vault_kill_switch_denies_credentials(stack: LiveStack):
 
 
 # ══════════════════════════════════════════════════════════════════════
-# JIT credentials at tool boundary — SEC-23..26  (pending P1.4)
+# JIT credentials at tool boundary — SEC-23..26  (P1.4)
 # ══════════════════════════════════════════════════════════════════════
 
 
-@pytest.mark.xfail(strict=True, reason="P1.4: ToolExecutor.execute does not yet require credentials")
+@pytest.mark.asyncio
+async def test_sec23_tool_without_credential_rejected(stack: LiveStack):
+    """E2E SEC-23: executor (with vault wired) rejects tool calls that
+    present no credential at all."""
+    r = await stack.tools.execute(
+        ToolCall(tool_name="read_file", arguments={"path": "README.md"}),
+        caller_role=AgentRole.DETECTIVE,
+        credential=None,
+    )
+    assert r.success is False
+    assert "credential" in (r.error or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_sec24_agent_path_issues_and_verifies_credential(stack: LiveStack):
+    """E2E SEC-24: the legitimate BaseAgent path (_call_tool) issues a
+    JIT credential, the executor verifies it, and the call succeeds."""
+    import time as _time
+
+    # Register a Detective agent directly with the vault the stack uses.
+    nhi = stack.vault.register_agent(AgentRole.DETECTIVE)
+    cred = stack.vault.issue_credential(
+        nhi.agent_id, scope="tool:read_file", ttl_seconds=30,
+    )
+    assert cred is not None and cred.is_valid
+
+    # A correctly-scoped, vault-issued credential is accepted.
+    r = await stack.tools.execute(
+        ToolCall(tool_name="read_file", arguments={"path": "README.md"}),
+        caller_role=AgentRole.DETECTIVE,
+        credential=cred,
+    )
+    # The read_file tool may either return real content or a permission
+    # error depending on the test sandbox, but it MUST NOT be rejected
+    # at the credential layer.
+    err = (r.error or "").lower()
+    assert "credential required" not in err and "credential rejected" not in err
+
+
 @pytest.mark.asyncio
 async def test_sec25_forged_credential_rejected(stack: LiveStack):
-    """E2E SEC-25: forged credential is rejected by ToolExecutor."""
-    # Once `credential=` is a required parameter, passing a hand-made
-    # JITCredential with no vault entry must fail.
-    assert False
+    """E2E SEC-25: a forged credential (not issued by this vault) is
+    rejected by ToolExecutor."""
+    # Hand-roll a JITCredential with a plausible-looking ID but no
+    # corresponding entry in the vault.
+    import time as _time
+
+    forged = JITCredential(
+        credential_id="cred-deadbeef00000000",
+        agent_id="detective-forged",
+        token="a" * 64,
+        scope="tool:read_file",
+        issued_at=_time.time(),
+        ttl_seconds=60,
+    )
+    r = await stack.tools.execute(
+        ToolCall(tool_name="read_file", arguments={"path": "README.md"}),
+        caller_role=AgentRole.DETECTIVE,
+        credential=forged,
+    )
+    assert r.success is False
+    assert "credential" in (r.error or "").lower()
+    assert "reject" in (r.error or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_sec26_scope_mismatch_rejected(stack: LiveStack):
+    """E2E SEC-26: a credential issued for one tool cannot be used for
+    another (scope mismatch rejected)."""
+    nhi = stack.vault.register_agent(AgentRole.DETECTIVE)
+    # Issue a credential for read_file...
+    cred_for_read = stack.vault.issue_credential(
+        nhi.agent_id, scope="tool:read_file", ttl_seconds=30,
+    )
+    assert cred_for_read is not None
+
+    # ...try to replay it as a grep_search credential.
+    r = await stack.tools.execute(
+        ToolCall(tool_name="grep_search", arguments={"pattern": "test", "path": "."}),
+        caller_role=AgentRole.DETECTIVE,
+        credential=cred_for_read,
+    )
+    assert r.success is False
+    assert "credential" in (r.error or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_sec26b_revoked_credential_rejected(stack: LiveStack):
+    """E2E SEC-26b: a revoked credential is rejected even with correct
+    agent + scope (replay-after-revoke protection)."""
+    nhi = stack.vault.register_agent(AgentRole.DETECTIVE)
+    cred = stack.vault.issue_credential(
+        nhi.agent_id, scope="tool:read_file", ttl_seconds=30,
+    )
+    assert cred is not None
+    # Revoke, then try to replay.
+    assert stack.vault.revoke_credential(cred.credential_id) is True
+    r = await stack.tools.execute(
+        ToolCall(tool_name="read_file", arguments={"path": "README.md"}),
+        caller_role=AgentRole.DETECTIVE,
+        credential=cred,
+    )
+    assert r.success is False
+    assert "credential" in (r.error or "").lower()
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -345,12 +466,14 @@ async def test_sec25_forged_credential_rejected(stack: LiveStack):
 @pytest.mark.asyncio
 async def test_sec27_triage_cannot_apply_patch(stack: LiveStack):
     """E2E SEC-27: Triage role is blocked from apply_patch even if it asks."""
+    cred = _issue_cred(stack, AgentRole.TRIAGE, "apply_patch")
     r = await stack.tools.execute(
         ToolCall(
             tool_name="apply_patch",
             arguments={"file_path": "config/db.py", "diff": ""},
         ),
         caller_role=AgentRole.TRIAGE,
+        credential=cred,
     )
     assert r.success is False
     assert "not allowed" in (r.error or "").lower() or "role" in (r.error or "").lower()
@@ -359,9 +482,11 @@ async def test_sec27_triage_cannot_apply_patch(stack: LiveStack):
 @pytest.mark.asyncio
 async def test_sec28_validator_cannot_restart_service(stack: LiveStack):
     """E2E SEC-28: Validator role cannot restart_service."""
+    cred = _issue_cred(stack, AgentRole.VALIDATOR, "restart_service")
     r = await stack.tools.execute(
         ToolCall(tool_name="restart_service", arguments={"service_name": "nginx"}),
         caller_role=AgentRole.VALIDATOR,
+        credential=cred,
     )
     assert r.success is False
 

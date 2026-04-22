@@ -412,8 +412,17 @@ async def test_fn11_watcher_handles_truncate_in_place(stack: LiveStack):
 async def test_fn23_read_file_happy_path(stack: LiveStack):
     """E2E FN-23 companion: read_file returns contents of a known source file."""
     from backend.shared.models import ToolCall
+    from backend.shared.vault import AgentRole
+
+    # P1.4: the executor now requires a vault-issued JIT credential.
+    nhi = stack.vault.register_agent(AgentRole.DETECTIVE)
+    cred = stack.vault.issue_credential(
+        nhi.agent_id, scope="tool:read_file", ttl_seconds=30,
+    )
     result = await stack.tools.execute(
-        ToolCall(tool_name="read_file", arguments={"path": "config/db.py"})
+        ToolCall(tool_name="read_file", arguments={"path": "config/db.py"}),
+        caller_role=AgentRole.DETECTIVE,
+        credential=cred,
     )
     assert result.success is True
     assert "DB_HOST" in (result.output or "")
