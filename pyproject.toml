@@ -1,0 +1,107 @@
+# P3.4 — Tool configuration.
+#
+# Consolidates ruff / mypy / pytest / coverage config in one place so
+# the CI workflow (``.github/workflows/ci.yml``) and local developers
+# see identical rules. The legacy ``pytest.ini`` + ``.coveragerc`` are
+# kept as thin shims until every test migrates — they take precedence
+# over the values here for now.
+
+[project]
+name = "sentry"
+version = "0.3.0"
+description = "Self-healing server-monitor FastAPI + LangGraph application."
+requires-python = ">=3.12,<3.15"
+readme = "README.md"
+
+# ────────────────────────────────────────────────────────────────────
+# ruff — linter + formatter. Runs in CI on every PR (``ruff check``).
+# Strict rule enforcement will land in a follow-up cleanup; for now we
+# pick a baseline of high-signal lints and let the CI step soft-fail.
+# ────────────────────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [
+  ".venv",
+  "build",
+  "dist",
+  "htmlcov",
+  "frontend/node_modules",
+  "backend/persistence/migrations/versions",
+]
+
+[tool.ruff.lint]
+# E/W: pycodestyle, F: pyflakes, I: isort, B: bugbear, UP: pyupgrade,
+# SIM: simplify, RUF: ruff-specific.
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = [
+  "E501",   # long lines — reformatting is out-of-scope for P3.4
+  "B008",   # FastAPI Depends(...) in defaults is the idiomatic pattern
+  "B904",   # "raise from" is nice-to-have, not a correctness bug
+  "SIM108", # ternary style preference, not a correctness issue
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests are allowed to use assert + star imports freely.
+"backend/tests/**" = ["F403", "F405", "F811", "B011"]
+
+# ────────────────────────────────────────────────────────────────────
+# mypy — loose baseline today; ``--strict`` is a future P3.4b
+# deliverable. Running now catches real regressions without gating
+# the PR on every untyped third-party import.
+# ────────────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unreachable = true
+check_untyped_defs = true
+no_implicit_optional = true
+# Loosened vs. --strict:
+#   * disallow_untyped_defs = false (agents still use **kwargs).
+#   * disallow_any_generics = false (SQLAlchemy + LangGraph leak Any).
+disallow_untyped_defs = false
+disallow_any_generics = false
+
+[[tool.mypy.overrides]]
+# Alembic migration files are machine-written — no need to typecheck.
+module = "backend.persistence.migrations.*"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+# Tests use pytest fixtures that mypy can't infer cleanly.
+module = "backend.tests.*"
+ignore_errors = true
+
+# ────────────────────────────────────────────────────────────────────
+# pytest — delegates to the legacy ``pytest.ini`` until P3.4b migration.
+# ────────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+asyncio_mode = "auto"
+filterwarnings = [
+  # pydantic v1 shim under Python 3.14 is noisy but harmless.
+  "ignore::UserWarning:langchain_core._api.deprecation",
+]
+
+# ────────────────────────────────────────────────────────────────────
+# coverage — complements ``pytest-cov``. Report excludes match the
+# legacy ``.coveragerc`` so the CI artifact shape is stable.
+# ────────────────────────────────────────────────────────────────────
+[tool.coverage.run]
+branch = true
+source = ["backend"]
+omit = [
+  "backend/tests/*",
+  "backend/persistence/migrations/*",
+  "backend/**/__init__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+  "pragma: no cover",
+  "raise NotImplementedError",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+]

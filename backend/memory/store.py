@@ -5,6 +5,14 @@ Implements IMemoryStore with thread-safe, crash-safe file operations.
 Writes are atomic: content is written to `<path>.tmp`, fsynced, then
 os.replace()d into place. A crash mid-write leaves either the old file
 or the new file — never a partial one.
+
+**P3.4 deprecation note.**  The JSON store remains the dev-mode default
+(when ``DATABASE_URL`` is empty) and is used by the entire pre-P1.2 test
+suite. In production, configure a Postgres ``DATABASE_URL`` and
+:class:`backend.persistence.repositories.memory_repo.PostgresMemoryRepo`
+takes over automatically — it implements the same :class:`IMemoryStore`
+contract. Deleting this module is blocked on migrating the ~25 unit
+tests that import it directly; see P3.4b in ``implementation_plan.md``.
 """
 
 import asyncio
