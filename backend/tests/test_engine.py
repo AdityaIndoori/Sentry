@@ -154,7 +154,9 @@ class TestOrchestratorInit:
 
         assert orch._config is config
         assert orch._active_incidents == {}
-        assert orch._resolved_incidents == []
+        # _resolved_incidents is a deque(maxlen=MAX_RESOLVED_INCIDENTS);
+        # verify emptiness via len() so the comparison is deque/list agnostic.
+        assert len(orch._resolved_incidents) == 0
         mock_registry.build_fingerprint.assert_called_once()
 
     def test_init_without_service_context(self, mock_llm, mock_tools, mock_memory, circuit_breaker):
@@ -244,7 +246,15 @@ class TestHandleEvent:
         assert len(orch._resolved_incidents) == 0
 
     @pytest.mark.asyncio
-    async def test_escalated_incident_stays_active(self, mock_llm, mock_tools, mock_memory, circuit_breaker, log_event):
+    async def test_escalated_incident_removed_from_active(self, mock_llm, mock_tools, mock_memory, circuit_breaker, log_event):
+        """Regression test: ESCALATED incidents must be removed from the
+        _active_incidents dict on terminal completion, not leaked forever.
+
+        Previously only RESOLVED and IDLE were cleaned up; ESCALATED stayed
+        in the active dict indefinitely, bloating /api/status and leaking
+        memory. The engine now removes ALL terminal states in a finally
+        block regardless of how we got there.
+        """
         orch = self._make_orchestrator(
             mock_llm, mock_tools, mock_memory, circuit_breaker,
             final_incident_state=IncidentState.ESCALATED,
@@ -253,8 +263,10 @@ class TestHandleEvent:
 
         assert result is not None
         assert result.state == IncidentState.ESCALATED
-        # Escalated stays in active (not deleted unless RESOLVED or IDLE)
-        assert len(orch._active_incidents) == 1
+        # ESCALATED is a terminal state — must NOT remain in _active_incidents.
+        assert len(orch._active_incidents) == 0
+        # And must not be promoted into _resolved_incidents either.
+        assert len(orch._resolved_incidents) == 0
 
     @pytest.mark.asyncio
     async def test_exception_sets_escalated(self, mock_llm, mock_tools, mock_memory, circuit_breaker, log_event):
@@ -275,6 +287,9 @@ class TestHandleEvent:
 
         result = await orch.handle_event(log_event)
         assert result.state == IncidentState.ESCALATED
+        # Exception-path also removes the incident from _active_incidents
+        # via the finally block — no leaked escalated incidents.
+        assert len(orch._active_incidents) == 0
 
     @pytest.mark.asyncio
     async def test_fifo_cap_on_resolved(self, mock_llm, mock_tools, mock_memory, circuit_breaker, log_event):
@@ -400,7 +415,11 @@ class TestOrchestratorStatus:
     async def test_get_status(self, mock_llm, mock_tools, mock_memory, circuit_breaker):
         orch = self._build_orch(mock_llm, mock_tools, mock_memory, circuit_breaker)
         orch._active_incidents["INC-1"] = Incident(id="INC-1", symptom="err")
-        orch._resolved_incidents = [Incident(id="INC-0", symptom="old", state=IncidentState.RESOLVED)]
+        # _resolved_incidents is a deque; use append rather than reassigning
+        # to a list (which would break type invariants).
+        orch._resolved_incidents.append(
+            Incident(id="INC-0", symptom="old", state=IncidentState.RESOLVED)
+        )
 
         status = await orch.get_status()
         assert status["active_incidents"] == 1

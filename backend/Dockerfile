@@ -3,11 +3,20 @@ FROM python:3.12-slim AS base
 # Security: run as non-root
 RUN groupadd -r sentry && useradd -r -g sentry sentry
 
-# Install git (required by apply_patch tool for safe diff application)
-# Install docker-cli only (required by restart_service tool to restart containers via Docker socket)
+# Install git (required by apply_patch tool for safe diff application).
+#
+# P0.2: We DO NOT install docker-cli anymore. Previous revisions installed
+# the static docker binary + added the sentry user to the root group so it
+# could reach `/var/run/docker.sock` from inside the container — a
+# container-escape primitive (anything with access to the docker socket
+# can launch a privileged container as root on the host).
+#
+# Instead, the `restart_service` tool now executes the operator's
+# SERVICE_RESTART_CMD as an ordinary shell command inside the container.
+# If the operator needs to reach out to Docker on the host, they should
+# run a small privileged sidecar (e.g. `docker-socket-proxy`) and point
+# SERVICE_RESTART_CMD at it; never give the backend the raw socket.
 RUN apt-get update && apt-get install -y --no-install-recommends git curl \
-    && curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz \
-       | tar xz --strip-components=1 -C /usr/local/bin docker/docker \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -52,11 +61,17 @@ FROM base AS production
 COPY --from=test /app/.tests-passed /tmp/.tests-passed
 RUN rm -f /tmp/.tests-passed
 
-# Create data and watched directories (writable volumes)
-# Add sentry to root group so it can access Docker socket (mounted at /var/run/docker.sock)
-RUN mkdir -p /app/data /app/watched && \
-    chown -R sentry:sentry /app && \
-    usermod -aG root sentry
+# Create data, watched, and patchable directories as writable volumes.
+# P0.2: `/app/patchable` is the ONLY writable path a Surgeon Agent can
+# target — apply_patch validates against settings.ALLOWED_PATCH_PATHS
+# which defaults to `/app/patchable/**`. `/app/workspace` is mounted
+# read-only by docker-compose so source-code tampering is impossible.
+#
+# P0.2: Removed `usermod -aG root sentry` — that was a real privilege
+# escalation (sentry in root group could read the docker socket and
+# escape the container). Non-root + cap-dropped is the new baseline.
+RUN mkdir -p /app/data /app/watched /app/patchable && \
+    chown -R sentry:sentry /app
 
 USER sentry
 

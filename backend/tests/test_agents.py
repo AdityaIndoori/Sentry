@@ -88,11 +88,9 @@ def test_incident():
 # ═══════════════════════════════════════════════════════════════
 
 class TestAgentIdentity:
-    def test_supervisor_gets_unique_nhi(self, vault):
-        from backend.agents.supervisor import SupervisorAgent
-        agent = SupervisorAgent(vault=vault, config=MagicMock())
-        assert agent.nhi is not None
-        assert agent.nhi.role == AgentRole.SUPERVISOR
+    # NOTE: SupervisorAgent has been removed — routing is now done by the
+    # LangGraph state machine in backend/orchestrator/graph.py. See
+    # TestGraphRouting below for coverage of the replacement logic.
 
     def test_triage_gets_unique_nhi(self, vault):
         from backend.agents.triage_agent import TriageAgent
@@ -666,99 +664,69 @@ class TestValidatorAgent:
 
 
 # ═══════════════════════════════════════════════════════════════
-# SUPERVISOR ROUTING TESTS
+# GRAPH ROUTING TESTS
+# (replaces the deleted SupervisorAgent routing — routing is now done
+#  directly by IncidentGraphBuilder._route_after_triage and
+#  _route_after_verification.)
 # ═══════════════════════════════════════════════════════════════
 
-class TestSupervisorRouting:
-    def test_triage_investigate_routes_to_detective(self):
-        from backend.agents.supervisor import route_after_triage
-        state = {"triage_result": {"verdict": "INVESTIGATE"}}
-        assert route_after_triage(state) == "detective"
+
+def _make_graph_builder():
+    """Build a minimal IncidentGraphBuilder for routing-only tests.
+
+    Only the routing methods are exercised here; the LLM/tools/etc. are
+    never called, so mock objects are fine.
+    """
+    from backend.orchestrator.graph import IncidentGraphBuilder
+    return IncidentGraphBuilder(
+        config=MagicMock(),
+        llm=AsyncMock(),
+        tools=AsyncMock(),
+        memory=AsyncMock(),
+        circuit_breaker=MagicMock(),
+    )
+
+
+class TestGraphRouting:
+    """Routing is now done by graph.IncidentGraphBuilder, not SupervisorAgent.
+
+    The graph routes on `incident.state` rather than a separate verdict dict:
+    - After triage, a FALSE_POSITIVE sets state=IDLE and a decision to
+      INVESTIGATE sets state=DIAGNOSIS; the router reads state.
+    - After verification, state=RESOLVED or state=ESCALATED both terminate.
+    """
+
+    def test_triage_investigate_routes_to_diagnosis(self):
+        builder = _make_graph_builder()
+        incident = Incident(id="INC-R", symptom="err", state=IncidentState.DIAGNOSIS)
+        assert builder._route_after_triage({"incident": incident}) == "diagnosis"
 
     def test_triage_false_positive_routes_to_end(self):
-        from backend.agents.supervisor import route_after_triage
-        state = {"triage_result": {"verdict": "FALSE_POSITIVE"}}
-        assert route_after_triage(state) == "end"
+        builder = _make_graph_builder()
+        incident = Incident(id="INC-R", symptom="err", state=IncidentState.IDLE)
+        assert builder._route_after_triage({"incident": incident}) == "end"
 
-    def test_triage_default_routes_to_detective(self):
-        """Missing verdict defaults to INVESTIGATE → detective."""
-        from backend.agents.supervisor import route_after_triage
-        state = {"triage_result": {}}
-        assert route_after_triage(state) == "detective"
+    def test_triage_escalated_routes_to_end(self):
+        """If triage escalated (e.g. exception), we must terminate."""
+        builder = _make_graph_builder()
+        incident = Incident(id="INC-R", symptom="err", state=IncidentState.ESCALATED)
+        assert builder._route_after_triage({"incident": incident}) == "end"
 
     def test_verification_resolved_routes_to_end(self):
-        from backend.agents.supervisor import route_after_verification
-        state = {"incident": MagicMock(state=IncidentState.RESOLVED)}
-        assert route_after_verification(state) == "end"
-
-    def test_verification_failed_routes_to_detective(self):
-        from backend.agents.supervisor import route_after_verification
-        state = {"incident": MagicMock(state=IncidentState.DIAGNOSIS)}
-        assert route_after_verification(state) == "detective"
+        builder = _make_graph_builder()
+        incident = Incident(id="INC-R", symptom="err", state=IncidentState.RESOLVED)
+        assert builder._route_after_verification({"incident": incident}) == "end"
 
     def test_verification_escalated_routes_to_end(self):
-        from backend.agents.supervisor import route_after_verification
-        state = {"incident": MagicMock(state=IncidentState.ESCALATED)}
-        assert route_after_verification(state) == "end"
+        builder = _make_graph_builder()
+        incident = Incident(id="INC-R", symptom="err", state=IncidentState.ESCALATED)
+        assert builder._route_after_verification({"incident": incident}) == "end"
 
-    def test_verification_no_incident_routes_to_end(self):
-        from backend.agents.supervisor import route_after_verification
-        state = {}
-        assert route_after_verification(state) == "end"
-
-
-class TestSupervisorAgentRoute:
-    """Tests for SupervisorAgent.route() method."""
-
-    @pytest.fixture
-    def supervisor(self, vault):
-        from backend.agents.supervisor import SupervisorAgent
-        return SupervisorAgent(vault=vault, config=MagicMock())
-
-    async def test_route_triage_false_positive(self, supervisor):
-        incident = Incident(id="INC-R", symptom="err")
-        result = await supervisor.route(incident, {"verdict": "FALSE_POSITIVE"}, "triage")
-        assert result == "end"
-
-    async def test_route_triage_investigate(self, supervisor):
-        incident = Incident(id="INC-R", symptom="err")
-        result = await supervisor.route(incident, {"verdict": "INVESTIGATE"}, "triage")
-        assert result == "detective"
-
-    async def test_route_detective_root_cause_found(self, supervisor):
-        incident = Incident(id="INC-R", symptom="err")
-        result = await supervisor.route(incident, {"root_cause": "Bad config"}, "detective")
-        assert result == "surgeon"
-
-    async def test_route_detective_inconclusive(self, supervisor):
-        incident = Incident(id="INC-R", symptom="err")
-        result = await supervisor.route(incident, {"root_cause": "Unknown"}, "detective")
-        assert result == "end"
-
-    async def test_route_detective_no_root_cause(self, supervisor):
-        incident = Incident(id="INC-R", symptom="err")
-        result = await supervisor.route(incident, {}, "detective")
-        assert result == "end"
-
-    async def test_route_surgeon_goes_to_validator(self, supervisor):
-        incident = Incident(id="INC-R", symptom="err")
-        result = await supervisor.route(incident, {"fix_applied": True}, "surgeon")
-        assert result == "validator"
-
-    async def test_route_validator_resolved(self, supervisor):
-        incident = Incident(id="INC-R", symptom="err", state=IncidentState.RESOLVED)
-        result = await supervisor.route(incident, {}, "validator")
-        assert result == "end"
-
-    async def test_route_validator_retry(self, supervisor):
+    def test_verification_unresolved_routes_to_diagnosis_retry(self):
+        """Incident not in a terminal state after verification → retry diagnosis."""
+        builder = _make_graph_builder()
         incident = Incident(id="INC-R", symptom="err", state=IncidentState.DIAGNOSIS)
-        result = await supervisor.route(incident, {}, "validator")
-        assert result == "detective"
-
-    async def test_route_unknown_phase(self, supervisor):
-        incident = Incident(id="INC-R", symptom="err")
-        result = await supervisor.route(incident, {}, "unknown_phase")
-        assert result == "end"
+        assert builder._route_after_verification({"incident": incident}) == "diagnosis"
 
 
 # ═══════════════════════════════════════════════════════════════

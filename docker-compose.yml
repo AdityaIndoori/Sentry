@@ -1,8 +1,60 @@
 # All configuration lives in .env — edit that file, not this one.
 # Setup:  cp .env.example .env && edit .env
 # Run:    docker compose up --build
+#
+# P0.2 hardening summary (vs. the previous revision):
+#   • /var/run/docker.sock mount REMOVED — no more container escape via
+#     Docker API. Configure SERVICE_RESTART_CMD to hit a restart webhook or
+#     run a docker-socket-proxy sidecar if you need autonomous restarts.
+#   • ${SERVICE_HOST_PATH} now mounts read-only (`:ro`) — the Surgeon
+#     Agent can read the monitored service's code but can't rewrite it.
+#   • New sentry-patchable volume — apply_patch is restricted to this
+#     path by ALLOWED_PATCH_PATHS in the backend settings.
+#   • cap_drop: [ALL] + pids_limit + mem_limit + cpus + bounded logging
+#     driver. No capability is retained — the container runs as a pure
+#     userland process with nothing but bind(2) to port 8000.
+#
+# If you want to opt back in to Docker-socket-based restarts for a local
+# demo ONLY (NEVER in production), create a docker-compose.override.yml
+# and re-add the socket mount there — do not put it back in this file.
 
 services:
+  # ── P1.2: Postgres sidecar ──────────────────────────────────────────
+  #
+  # Enabled by default. When Sentry's DATABASE_URL is empty, the backend
+  # still boots and uses the legacy JSON memory store + JSONL audit log,
+  # so this service is harmless for users who haven't migrated. Set
+  # DATABASE_URL=postgresql+asyncpg://sentry:sentry@postgres:5432/sentry
+  # in .env to flip the backend to Postgres-backed persistence.
+  postgres:
+    image: postgres:16-alpine
+    container_name: sentry-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sentry}
+      POSTGRES_USER: ${POSTGRES_USER:-sentry}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sentry}
+    volumes:
+      - sentry-postgres-data:/var/lib/postgresql/data
+    # Not exposed to the host by default — only the backend needs access.
+    # Uncomment the ports block below if you want to connect with psql
+    # from your laptop for debugging.
+    # ports:
+    #   - "127.0.0.1:5432:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sentry} -d ${POSTGRES_DB:-sentry}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   backend:
     build:
       context: ./backend
@@ -14,14 +66,39 @@ services:
     volumes:
       - sentry-data:/app/data
       - ./watched:/app/watched
-      - ${SERVICE_HOST_PATH:-./_no_service}:/app/workspace
-      # Docker socket — allows restart_service tool to restart monitored containers
-      - /var/run/docker.sock:/var/run/docker.sock
+      # P0.2: monitored-service source is read-only. The Surgeon Agent
+      # reads this path to understand the code, but apply_patch writes
+      # only into /app/patchable (mounted below). Any agent attempt to
+      # patch /app/workspace fails with "Read-only file system" AND is
+      # rejected up-front by the ALLOWED_PATCH_PATHS check.
+      - ${SERVICE_HOST_PATH:-./_no_service}:/app/workspace:ro
+      - sentry-patchable:/app/patchable
     ports:
       - "8000:8000"
+    depends_on:
+      postgres:
+        # Postgres must be ready before the backend starts Alembic +
+        # its lifespan. When users run without the Postgres service
+        # (e.g. a minimal dev stack) they can `docker compose up
+        # backend frontend` and DATABASE_URL empty keeps legacy JSON
+        # mode in effect.
+        condition: service_healthy
     restart: unless-stopped
+    # --- P0.2 hardening flags ---------------------------------------------
     security_opt:
-      - no-new-privileges:true
+      - no-new-privileges:true   # Prevents setuid-based privilege escalation
+    cap_drop:
+      - ALL                       # Drop every Linux capability; none are needed
+    read_only: false              # /app/data & /app/patchable must be writable
+    pids_limit: 512               # Prevents fork-bomb DoS from an LLM tool loop
+    mem_limit: 2g                 # Hard RAM cap — runaway Python heap is bounded
+    cpus: "2"                     # Two vCPU quota — noisy neighbour protection
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"           # 10 MB per log file
+        max-file: "5"             # Rotate across 5 files → 50 MB cap total
+    # ----------------------------------------------------------------------
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 30s
@@ -47,6 +124,23 @@ services:
       - /var/run
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: 256m
+    cpus: "0.5"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   sentry-data:
+  # P0.2: Writable volume bound to /app/patchable inside the backend.
+  # This is the ONLY path the Surgeon Agent can modify — see
+  # ALLOWED_PATCH_PATHS in backend.shared.config.
+  sentry-patchable:
+  # P1.2: Postgres data volume. Delete this to wipe all persisted
+  # incidents / memory / audit rows.
+  sentry-postgres-data:

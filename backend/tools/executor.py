@@ -98,6 +98,57 @@ class ToolExecutor(IToolExecutor):
                 metadata=metadata,
             )
 
+    def _validate_tool_content(self, tool_name: str, args: dict) -> Optional[str]:
+        """P0.1b: Enforce tool-specific content rules BEFORE AUDIT short-circuit.
+
+        Returns an error string if validation fails, or None if OK. These are
+        the same checks each tool runs internally — duplicating them here
+        ensures that the outer AUDIT short-circuit never lets malicious args
+        through as "audit_only=True".
+
+        The individual tools still validate themselves when actually executed,
+        so this is defense-in-depth rather than a new gate.
+        """
+        sg = self._security
+        if tool_name == "run_diagnostics":
+            cmd = args.get("command", "")
+            # sanitize happened earlier; validate_command reads the first token
+            sanitized = sg.sanitize_input(cmd)
+            if not sg.validate_command(sanitized):
+                return f"Command not in whitelist: {sanitized}"
+            return None
+
+        if tool_name in ("read_file", "grep_search"):
+            path = args.get("path", "")
+            if tool_name == "grep_search" and not path:
+                path = "."
+            # Note: sanitize_input strips some characters but validate_path
+            # is what enforces the traversal / escape rules.
+            sanitized_path = sg.sanitize_input(path)
+            if not sg.validate_path(sanitized_path):
+                return "Path validation failed"
+            return None
+
+        if tool_name == "apply_patch":
+            # Only the path is a security-critical argument here; the diff
+            # itself is validated semantically by the patch engine.
+            path = args.get("file_path", "")
+            sanitized_path = sg.sanitize_input(path)
+            if not sg.validate_path(sanitized_path):
+                return "Path validation failed"
+            return None
+
+        if tool_name == "fetch_docs":
+            url = args.get("url", "")
+            if not sg.validate_url(url):
+                return "URL not in allow-list"
+            return None
+
+        # restart_service: no user-supplied args to validate (the command
+        # comes from SERVICE_RESTART_CMD env var and is trusted by the
+        # operator).
+        return None
+
     async def execute(self, tool_call: ToolCall, caller_role: Optional[AgentRole] = None) -> ToolResult:
         # --- Sanitize all string arguments before processing ---
         sanitized_args = {}
@@ -172,9 +223,71 @@ class ToolExecutor(IToolExecutor):
                     error=f"Tool '{tool_call.tool_name}' not allowed for role '{caller_role.value}'",
                 )
 
+        # --- #3: Pydantic arg validation (single source of truth) ---
+        # P0.1b: Pydantic validation MUST run before the AUDIT short-circuit
+        # below. Otherwise an attacker can submit malformed args in AUDIT
+        # mode and have them silently "logged and not executed" — but the
+        # audit log records a sanitized version rather than hard-rejecting.
+        arg_model = TOOL_ARG_MODELS.get(tool_call.tool_name)
+        if arg_model:
+            try:
+                validated = arg_model.model_validate(tool_call.arguments)
+                # Use validated (coerced) args going forward
+                validated_args = validated.model_dump()
+            except ValidationError as e:
+                logger.warning(
+                    f"Arg validation failed for {tool_call.tool_name}: {e}"
+                )
+                self._audit(
+                    "tool_blocked",
+                    f"tool={tool_call.tool_name}",
+                    "invalid_arguments",
+                    metadata={"tool": tool_call.tool_name, "reason": "pydantic_validation"},
+                )
+                return ToolResult(
+                    tool_name=tool_call.tool_name,
+                    success=False,
+                    error=f"Invalid arguments: {e}",
+                )
+        else:
+            validated_args = tool_call.arguments
+
+        # --- P0.1b: Tool-specific content validation BEFORE AUDIT short-circuit ---
+        # The outer AUDIT short-circuit historically returned audit_only=True
+        # for any ACTIVE tool call, skipping the tool's own validators
+        # (validate_command, validate_path, validate_url). That meant a
+        # malicious command like `rm -rf /` passed in AUDIT mode was recorded
+        # as "safely logged" when it should have been hard-rejected.
+        #
+        # We run the same content validators that each tool runs internally,
+        # but do it here BEFORE the AUDIT short-circuit so that garbage input
+        # is always rejected regardless of mode. This is defense-in-depth:
+        # the tools still validate themselves when actually executed, and the
+        # executor validates one layer out.
+        content_error = self._validate_tool_content(tool_call.tool_name, validated_args)
+        if content_error is not None:
+            logger.warning(
+                f"Content validation failed for {tool_call.tool_name}: {content_error}"
+            )
+            self._audit(
+                "tool_blocked",
+                f"tool={tool_call.tool_name}",
+                "content_validation",
+                metadata={"tool": tool_call.tool_name, "reason": "content_validation"},
+            )
+            return ToolResult(
+                tool_name=tool_call.tool_name,
+                success=False,
+                error=content_error,
+            )
+
         # Bug fix #10: Enforce audit mode centrally for ACTIVE tools.
         # Individual tools check audit mode themselves, but this provides
         # a safety net at the executor level for any tool that forgets.
+        #
+        # P0.1b: This short-circuit NOW runs AFTER both Pydantic and
+        # content validation so malicious args cannot slip through as
+        # "audit_only=True".
         if category == ToolCategory.ACTIVE and self._security.is_audit_mode():
             logger.info(
                 f"[AUDIT] Blocked active tool at executor level: "
@@ -192,25 +305,6 @@ class ToolExecutor(IToolExecutor):
                 output=f"[AUDIT MODE] Tool {tool_call.tool_name} logged but not executed.",
                 audit_only=True,
             )
-
-        # --- #3: Pydantic arg validation (single source of truth) ---
-        arg_model = TOOL_ARG_MODELS.get(tool_call.tool_name)
-        if arg_model:
-            try:
-                validated = arg_model.model_validate(tool_call.arguments)
-                # Use validated (coerced) args going forward
-                validated_args = validated.model_dump()
-            except ValidationError as e:
-                logger.warning(
-                    f"Arg validation failed for {tool_call.tool_name}: {e}"
-                )
-                return ToolResult(
-                    tool_name=tool_call.tool_name,
-                    success=False,
-                    error=f"Invalid arguments: {e}",
-                )
-        else:
-            validated_args = tool_call.arguments
 
         logger.info(
             f"Executing tool: {tool_call.tool_name} "

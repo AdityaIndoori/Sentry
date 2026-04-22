@@ -5,6 +5,7 @@ Implements IOrchestrator interface, delegates to LangGraph graph nodes.
 
 import logging
 import uuid
+from collections import deque
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -59,7 +60,8 @@ class Orchestrator(IOrchestrator):
         self._throttle = throttle
         self._registry = registry
         self._active_incidents: dict[str, Incident] = {}
-        self._resolved_incidents: list[Incident] = []
+        # Use deque with maxlen so FIFO trimming is O(1) and correct by construction.
+        self._resolved_incidents: deque[Incident] = deque(maxlen=MAX_RESOLVED_INCIDENTS)
 
         # Load Service Awareness Layer — built from .env paths, no YAML needed
         self._service_registry = ServiceRegistry(config)
@@ -79,7 +81,12 @@ class Orchestrator(IOrchestrator):
         self._graph = builder.build()
 
     async def handle_event(self, event: LogEvent) -> Optional[Incident]:
-        """Process a log event through the LangGraph state machine."""
+        """Process a log event through the LangGraph state machine.
+
+        Terminal states (RESOLVED, IDLE, ESCALATED) are ALWAYS removed from
+        the `_active_incidents` dict in the finally block — this prevents
+        the ESCALATED-leak bug where failed incidents accumulated forever.
+        """
         if self._cb.is_tripped:
             logger.warning("Circuit breaker tripped - skipping event")
             return None
@@ -108,18 +115,9 @@ class Orchestrator(IOrchestrator):
             final_state = await self._graph.ainvoke(initial_state)
             incident = final_state["incident"]
 
-            # Update our tracking
-            self._active_incidents[incident_id] = incident
-
             if incident.state == IncidentState.RESOLVED:
                 await self._save_to_memory(incident)
                 self._resolved_incidents.append(incident)
-                # --- #4: FIFO cap on resolved list to prevent unbounded growth ---
-                if len(self._resolved_incidents) > MAX_RESOLVED_INCIDENTS:
-                    self._resolved_incidents = self._resolved_incidents[-MAX_RESOLVED_INCIDENTS:]
-                del self._active_incidents[incident_id]
-            elif incident.state == IncidentState.IDLE:
-                del self._active_incidents[incident_id]
 
             logger.info(
                 f"Incident {incident_id} completed: state={incident.state.value}, "
@@ -127,8 +125,15 @@ class Orchestrator(IOrchestrator):
             )
 
         except Exception as e:
-            logger.error(f"Orchestrator error for {incident_id}: {e}")
+            logger.exception(f"Orchestrator error for {incident_id}: {e}")
             incident.state = IncidentState.ESCALATED
+
+        finally:
+            # Bug fix: every terminal state must be removed from _active_incidents.
+            # Previously only RESOLVED and IDLE were cleaned up; ESCALATED leaked
+            # forever and bloated /api/status. Now all terminal states are removed
+            # unconditionally — whether we got there by success, error, or escalation.
+            self._active_incidents.pop(incident_id, None)
 
         return incident
 

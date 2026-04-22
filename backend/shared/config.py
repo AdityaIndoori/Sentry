@@ -44,8 +44,14 @@ class SecurityConfig:
         "man7.org", "nginx.org", "postgresql.org",
     }))
     project_root: str = "/app/workspace"
+    # P0.2: apply_patch writes only here. /app/workspace is read-only in
+    # docker-compose so the Surgeon Agent cannot mutate the monitored
+    # service's source tree — it proposes fixes by writing files into this
+    # volume, which the operator can then review and copy into place.
+    patchable_root: str = "/app/patchable"
     max_grep_results: int = 100
     max_file_size_bytes: int = 1_048_576  # 1MB
+
 
 
 class LLMProvider(Enum):
@@ -130,7 +136,9 @@ def load_config() -> AppConfig:
         max_retries=int(os.environ.get("MAX_RETRIES", "3")),
         restart_cooldown_seconds=int(os.environ.get("RESTART_COOLDOWN", "600")),
         project_root=os.environ.get("PROJECT_ROOT", "/app/workspace"),
+        patchable_root=os.environ.get("PATCHABLE_ROOT", "/app/patchable"),
     )
+
 
     anthropic = AnthropicConfig(
         api_key=os.environ.get("ANTHROPIC_API_KEY", ""),

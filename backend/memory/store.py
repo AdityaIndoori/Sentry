@@ -1,6 +1,10 @@
 """
 JSON-based memory store for incident history.
-Implements IMemoryStore with thread-safe file operations.
+Implements IMemoryStore with thread-safe, crash-safe file operations.
+
+Writes are atomic: content is written to `<path>.tmp`, fsynced, then
+os.replace()d into place. A crash mid-write leaves either the old file
+or the new file — never a partial one.
 """
 
 import asyncio
@@ -19,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 class JSONMemoryStore(IMemoryStore):
-    """Persistent JSON-based memory store."""
+    """Persistent JSON-based memory store with atomic writes."""
 
     def __init__(self, config: MemoryConfig):
         self._config = config
@@ -33,16 +37,44 @@ class JSONMemoryStore(IMemoryStore):
 
     def _read_raw(self) -> dict:
         try:
-            with open(self._config.file_path, "r") as f:
+            with open(self._config.file_path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except (json.JSONDecodeError, FileNotFoundError):
             return {"system_fingerprint": "", "incident_history": []}
 
     def _write_raw(self, data: dict) -> None:
+        """Atomic write: tmp + fsync + os.replace.
+
+        Crash-safe: if the process is killed mid-write the original file
+        is untouched. The .tmp file may be left behind but is reclaimed
+        on the next successful write.
+        """
         if self._config.backup_on_write and os.path.exists(self._config.file_path):
-            shutil.copy2(self._config.file_path, self._config.file_path + ".bak")
-        with open(self._config.file_path, "w") as f:
-            json.dump(data, f, indent=2)
+            try:
+                shutil.copy2(self._config.file_path, self._config.file_path + ".bak")
+            except OSError as e:  # pragma: no cover
+                logger.warning(f"Backup failed: {e}")
+
+        tmp_path = self._config.file_path + ".tmp"
+        payload = json.dumps(data, indent=2)
+        # Write to tmp, fsync the data + directory, then atomically rename.
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(payload)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:  # pragma: no cover (Windows file-sync quirks)
+                pass
+        os.replace(tmp_path, self._config.file_path)
+        # Best-effort directory fsync on POSIX to persist the rename.
+        try:  # pragma: no cover (POSIX-only)
+            dir_fd = os.open(os.path.dirname(self._config.file_path), os.O_DIRECTORY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except (OSError, AttributeError):
+            pass
 
     async def load(self) -> list[MemoryEntry]:
         async with self._lock:
