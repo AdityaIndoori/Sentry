@@ -58,7 +58,6 @@ async def test_fn01_health_endpoint(api_client):
     assert r.json()["status"] == "ok"
 
 
-@pytest.mark.xfail(strict=True, reason="P2.3: /api/ready distinct from /api/health not yet implemented")
 @pytest.mark.asyncio
 async def test_fn02_readiness_distinct_from_liveness(api_client):
     """E2E FN-02: /api/ready returns 200 only when all deps reachable."""

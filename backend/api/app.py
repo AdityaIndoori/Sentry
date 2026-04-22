@@ -38,6 +38,7 @@ from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -269,7 +270,100 @@ def _register_routes(app: FastAPI) -> None:
 
     @app.get("/api/health")
     async def health():
+        """Liveness probe — the process is alive enough to answer.
+
+        Intentionally shallow: no dep checks, no auth, no DB query.
+        Suitable for Kubernetes ``livenessProbe`` / docker ``HEALTHCHECK``
+        and stays open even when the auth token registry is non-empty
+        (see :class:`backend.api.auth.AuthMiddleware`).
+        """
         return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+    @app.get("/api/ready")
+    async def ready(request: Request):
+        """Readiness probe — the backend is ready to serve real traffic.
+
+        Checks each dependency that a "running" Sentry deployment needs:
+
+        * **llm_reachable** — an ``ILLMClient`` instance is wired on the
+          container. In tests this is the scripted ``FakeLLMClient``; in
+          production it's the Anthropic / Bedrock client.
+        * **db_reachable** — only enforced when Postgres is configured
+          (``settings.database_url`` non-empty). Issues a short-timeout
+          ``SELECT 1``. When Postgres is not in use this returns True
+          (the JSON store is always "reachable").
+        * **disk_writable** — the audit-log directory accepts a tmp
+          file create-and-delete round trip.
+
+        Returns ``200`` with ``{"ready": true, ...}`` when every check
+        passes, ``503`` with the same shape + ``"ready": false``
+        otherwise. Kubernetes ``readinessProbe`` and load balancers
+        should consult this endpoint; liveness stays on ``/api/health``.
+        """
+        import asyncio as _asyncio
+        import os as _os
+        import tempfile as _tempfile
+
+        container = _get_container(request)
+        cfg = _pick(request, "config", "_config")
+
+        # llm_reachable: truthy ILLMClient on the container (dev/tests
+        # use the FakeLLMClient which is always truthy; prod uses
+        # Anthropic client).
+        llm = container.llm if container is not None else None
+        llm_reachable = llm is not None
+
+        # db_reachable: SELECT 1 with a 2-second cap. Skipped when
+        # Postgres is not configured (JSON store mode).
+        db_reachable = True
+        db_error: Optional[str] = None
+        settings = container.settings if container is not None else None
+        database_url = getattr(settings, "database_url", None) if settings else None
+        if database_url and container is not None and container.database is not None:
+            try:
+                from sqlalchemy import text as _sql_text
+
+                async with container.database.sessionmaker() as session:
+                    await _asyncio.wait_for(
+                        session.execute(_sql_text("SELECT 1")),
+                        timeout=2.0,
+                    )
+            except Exception as exc:  # pragma: no cover — infra failure
+                db_reachable = False
+                db_error = str(exc).splitlines()[0][:200]
+
+        # disk_writable: create + remove a tmp file inside the audit
+        # log directory (the one location on the hot path that MUST
+        # accept writes).
+        disk_writable = True
+        disk_error: Optional[str] = None
+        if cfg is not None:
+            probe_dir = _os.path.dirname(cfg.audit_log_path) or "."
+            try:
+                _os.makedirs(probe_dir, exist_ok=True)
+                with _tempfile.NamedTemporaryFile(
+                    dir=probe_dir, prefix=".ready_probe_", delete=True,
+                ):
+                    pass
+            except Exception as exc:  # pragma: no cover — infra failure
+                disk_writable = False
+                disk_error = str(exc).splitlines()[0][:200]
+
+        ready_flag = llm_reachable and db_reachable and disk_writable
+        payload = {
+            "ready": ready_flag,
+            "llm_reachable": llm_reachable,
+            "db_reachable": db_reachable,
+            "disk_writable": disk_writable,
+        }
+        if db_error:
+            payload["db_error"] = db_error
+        if disk_error:
+            payload["disk_error"] = disk_error
+
+        if not ready_flag:
+            return JSONResponse(status_code=503, content=payload)
+        return payload
 
     @app.get(
         "/api/status",

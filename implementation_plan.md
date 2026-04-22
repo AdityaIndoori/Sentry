@@ -484,10 +484,18 @@ Sequence changes to minimize merge conflicts, keep tests green at every step, an
    - Document secret rotation for each backend in `ops/RUNBOOK.md` (e.g. `bao kv put sentry/anthropic_key=new` for Vault/OpenBao, `sops updatekeys secrets.yaml` for sops-age).
 
 9. **P2.3 — Observability.**
-   - `Telemetry`, OpenTelemetry instrumentation, Prometheus `/metrics`.
-   - Compose sidecars: Prometheus, Grafana (with provisioned dashboard), optional OTel Collector.
-   - Structlog JSON logs with trace-id correlation.
-   - Split `/api/health` (liveness) vs `/api/ready` (readiness: LLM reachable + DB reachable + disk writable).
+   - **P2.3a ✅ DONE** — Split `/api/health` (shallow liveness) vs
+     `/api/ready` (readiness: LLM reachable + DB reachable + disk
+     writable). Returns 200 when all deps reachable, 503 otherwise with
+     per-check booleans in the body. FN-02 E2E flipped from xfail to
+     passing. `/api/health` stays open (no auth, no dep checks) for
+     Kubernetes `livenessProbe`; `/api/ready` is the pool-drain probe.
+   - **P2.3b — DEFERRED** — `Telemetry` facade, OpenTelemetry SDK +
+     instrumentation, Prometheus `/metrics` endpoint with counters
+     (`incidents_total`, `llm_cost_usd_total`, `tool_calls_total`,
+     `watcher_events_total`, `circuit_breaker_trips_total`), structlog
+     JSON logs with trace-id correlation, Compose sidecars (Prometheus,
+     Grafana with provisioned dashboard, optional OTel Collector).
    - **Exit criteria:** Grafana dashboard shows live incidents, costs, watcher events.
 
 10. **P2.4 — SSE dashboard feed.**

@@ -199,7 +199,7 @@ feature in P1–P3 adds rows here.
 
 ---
 
-## Test Scoreboard (as of P2.1 completion)
+## Test Scoreboard (as of P2.3a completion)
 
 Last full run command:
 
@@ -207,7 +207,40 @@ Last full run command:
 cmd /v:on /c "set SENTRY_E2E=1&& python -m pytest backend/tests/ --no-cov -q"
 ```
 
-Combined unit + E2E: **651 passed / 6 skipped / 2 xfailed / 0 failed**.
+Combined unit + E2E: **673 passed / 7 skipped / 1 xfailed / 0 failed**.
+
+P2.3a delta: **one xfail flipped, +1 net pass** —
+
+* **FN-02** — xfail flipped: `/api/ready` is now a distinct endpoint
+  (separate from `/api/health`). Liveness stays shallow on `/api/health`
+  (always 200, no deps); readiness on `/api/ready` performs three probes
+  and returns `200` only when **llm_reachable**, **db_reachable** (skipped
+  when Postgres not configured), and **disk_writable** are all true —
+  otherwise `503` with the same payload shape. Kubernetes
+  `readinessProbe` / LB pool-drain hooks should consult `/api/ready`.
+
+Observability stack (OpenTelemetry SDK, Prometheus `/metrics`, structlog
+JSON logs, Grafana/Prometheus/OTel-collector compose sidecars) is
+**deferred to a follow-on P2.3b** — the liveness/readiness split was
+the smallest useful slice that flips FN-02 green and unblocks
+deploy-time readiness semantics today.
+
+P2.2 delta: **21 new unit tests passing, 1 skipped (hvac)** —
+
+* **TestISecretsProvider / TestEnvSecrets / TestFileSecrets /
+  TestSopsSecrets / TestVaultSecrets / TestBuildSecretsProvider** —
+  21 unit tests in `backend/tests/test_secrets.py` covering the new
+  `ISecretsProvider` ABC with four OSS backends:
+    * `EnvSecrets` — env vars with optional `SECRET_` prefix.
+    * `FileSecrets` — Docker/K8s-style `/run/secrets/<name>` files.
+    * `SopsSecrets` — `sops -d` YAML/JSON with dotted-path lookup.
+    * `VaultSecrets` — HashiCorp Vault OSS / OpenBao KVv2 (optional dep).
+* Zero AWS Secrets Manager dependency — pure-OSS stack preserved.
+* `build_secrets_provider(settings)` dispatches on `settings.secrets_backend`
+  and the provider is wired into `ServiceContainer.secrets` by the
+  factory. When `API_AUTH_TOKEN` is not set via env, the factory falls
+  back to the secrets provider, enabling prod deployments to store the
+  token in Vault / sops without a `.env` file.
 
 P2.1 delta: **36 new tests passing, three xfails flipped** —
 
