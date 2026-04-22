@@ -114,6 +114,15 @@ def build_container(
 
     cb = CostCircuitBreaker(max_cost_usd=config.security.max_cost_per_10min_usd)
 
+    # ── P2.4: in-process SSE broadcaster ────────────────────────────────
+    #
+    # One per container. The orchestrator publishes incident state
+    # transitions and the /api/stream/incidents route fans them out to
+    # every connected dashboard. Shutdown via ``ServiceContainer.shutdown``
+    # drains subscribers with a ``None`` sentinel.
+    from backend.api.broadcaster import IncidentBroadcaster
+    broadcaster = IncidentBroadcaster()
+
     orchestrator = Orchestrator(
         config,
         llm,
@@ -128,6 +137,8 @@ def build_container(
         # P1.3: pass incident persistence + timeout knob.
         incident_repo=incident_repo,
         orchestrator_timeout_seconds=settings.orchestrator_timeout_seconds,
+        # P2.4: live SSE fan-out.
+        broadcaster=broadcaster,
     )
     watcher = LogWatcher(config.watcher)
 
@@ -181,6 +192,7 @@ def build_container(
         incident_repo=incident_repo,
         auth_tokens=auth_tokens,
         secrets=secrets_provider,
+        broadcaster=broadcaster,
     )
 
     logger.info(

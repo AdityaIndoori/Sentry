@@ -77,6 +77,7 @@ class Orchestrator(IOrchestrator):
         incident_repo: Optional[Any] = None,  # IncidentRepository; optional keyword
         orchestrator_timeout_seconds: int = DEFAULT_ORCH_TIMEOUT_SECONDS,
         dedup_window_seconds: int = DEFAULT_DEDUP_WINDOW_SECONDS,
+        broadcaster: Optional[Any] = None,  # P2.4: IncidentBroadcaster; optional
     ):
         self._config = config
         self._llm = llm
@@ -91,6 +92,7 @@ class Orchestrator(IOrchestrator):
         self._incident_repo = incident_repo
         self._orch_timeout = orchestrator_timeout_seconds
         self._dedup_window = dedup_window_seconds
+        self._broadcaster = broadcaster
         self._active_incidents: dict[str, Incident] = {}
         # Use deque with maxlen so FIFO trimming is O(1) and correct by construction.
         self._resolved_incidents: deque[Incident] = deque(maxlen=MAX_RESOLVED_INCIDENTS)
@@ -228,6 +230,9 @@ class Orchestrator(IOrchestrator):
             except Exception:  # pragma: no cover
                 logger.exception("incident_repo.save failed at creation")
 
+        # --- P2.4: announce incident creation to live SSE subscribers ---
+        self._broadcast("incident.created", incident)
+
         try:
             # Build service context from .env paths
             service_context = self._service_registry.build_prompt_context()
@@ -296,7 +301,35 @@ class Orchestrator(IOrchestrator):
                 except Exception:  # pragma: no cover
                     logger.exception("incident_repo.save failed at terminal state")
 
+            # --- P2.4: announce terminal state to live SSE subscribers ---
+            # Done in the finally block so RESOLVED / IDLE / ESCALATED all
+            # fire an event — including the path where an exception skipped
+            # the happy-path return at the ``TimeoutError`` branch above.
+            self._broadcast("incident.updated", incident)
+
         return incident
+
+    # ------------------------------------------------------------------
+    # P2.4 broadcast helper
+    # ------------------------------------------------------------------
+
+    def _broadcast(self, kind: str, incident: Incident) -> None:
+        """Push an ``{kind, incident: <dict>}`` event to the broadcaster.
+
+        Never raises; broadcasting is best-effort and must not block the
+        orchestrator's hot path even if every SSE subscriber is wedged.
+        """
+        if self._broadcaster is None:
+            return
+        try:
+            payload = {
+                "kind": kind,
+                "incident": incident.to_dict(),
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }
+            self._broadcaster.publish_nowait(payload)
+        except Exception:  # pragma: no cover — defensive
+            logger.exception("broadcaster publish failed (kind=%s)", kind)
 
     async def _save_to_memory(self, incident: Incident) -> None:
         """Save resolved incident to long-term memory."""

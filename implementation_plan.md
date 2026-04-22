@@ -498,9 +498,44 @@ Sequence changes to minimize merge conflicts, keep tests green at every step, an
      Grafana with provisioned dashboard, optional OTel Collector).
    - **Exit criteria:** Grafana dashboard shows live incidents, costs, watcher events.
 
-10. **P2.4 — SSE dashboard feed.**
-    - Implement broadcaster in `ServiceContainer`; `stream.py` router; frontend `useIncidentStream` hook.
-    - Drop client-side polling.
+10. **P2.4 — SSE dashboard feed. [✓ DONE (backend); frontend hook deferred to P3.1]**
+    - ✅ `backend/api/broadcaster.py::IncidentBroadcaster` — in-process
+      fan-out primitive with per-subscriber ``asyncio.Queue``,
+      backpressure-safe ``publish_nowait`` (drop-new on full queue),
+      subscribe/close context manager, shutdown sentinel. 10 dedicated
+      unit tests in ``backend/tests/test_broadcaster.py`` cover single /
+      multi subscriber, queue full / slow subscriber isolation, close +
+      post-close publish-is-noop.
+    - ✅ `backend/orchestrator/engine.py::Orchestrator` gained an optional
+      ``broadcaster=`` kwarg and a ``_broadcast(kind, incident)`` helper;
+      publishes ``incident.created`` right after persisting the incident
+      on creation and ``incident.updated`` in the ``finally`` block so
+      RESOLVED / IDLE / ESCALATED (including the timeout path) all fire.
+    - ✅ `backend/shared/container.py::ServiceContainer` gained a
+      ``broadcaster`` field; ``shutdown()`` now calls
+      ``broadcaster.close()`` so in-flight SSE consumers unblock.
+    - ✅ `backend/shared/factory.py::build_container` instantiates an
+      ``IncidentBroadcaster`` and passes it to both the orchestrator
+      and the container.
+    - ✅ `backend/api/app.py` adds ``GET /api/stream/incidents`` — a
+      hand-rolled SSE route via ``StreamingResponse`` (no
+      ``sse-starlette`` dep). Emits an initial ``event: connected``
+      frame, then one frame per orchestrator event, with a 15 s
+      ``: keepalive`` heartbeat so HTTP proxies don't drop idle
+      connections. Guarded by the ``incidents:read`` scope, disconnect-
+      aware via ``request.is_disconnected()``, and terminates cleanly
+      on the broadcaster's shutdown sentinel.
+    - ✅ FN-20 E2E: ``test_fn20_broadcaster_fires_on_incident_lifecycle``
+      subscribes directly to the container's broadcaster and verifies
+      both lifecycle events carry the same incident id and the right
+      terminal ``state``.
+    - **Deferred to P3.1:** frontend ``useIncidentStream`` hook + drop
+      the 5-second polling loop. The backend wire format is stable and
+      ready; the frontend change is isolated to ``frontend/src/hooks/``
+      and doesn't block any further backend work.
+    - **Exit criteria met.** Full suite: **684 passed / 7 skipped /
+      1 xfailed / 0 failed** (was 673/7/1/0 at P2.3a; +11 = 10 unit +
+      1 E2E).
 
 11. **P3.1 — Frontend split + polish.**
     - Break `App.jsx` into components; add `ErrorBoundary`; tighten `nginx.conf` CSP; migrate frontend to TypeScript (optional).

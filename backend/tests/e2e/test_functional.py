@@ -427,6 +427,59 @@ async def test_fn23_read_file_happy_path(stack: LiveStack):
     assert "DB_HOST" in (result.output or "")
 
 
+# ══════════════════════════════════════════════════════════════════════
+# P2.4: Server-Sent Events live incident feed
+# ══════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio
+async def test_fn20_broadcaster_fires_on_incident_lifecycle(stack: LiveStack):
+    """E2E FN-20: orchestrator publishes incident.created + incident.updated.
+
+    Subscribes directly to the container's ``IncidentBroadcaster`` —
+    the same object the ``/api/stream/incidents`` SSE route subscribes
+    to — and verifies the orchestrator emits lifecycle events for both
+    creation and the terminal state transition.
+
+    Why not hit the HTTP endpoint? ``httpx.AsyncClient`` with the ASGI
+    transport buffers streaming responses until the generator finishes,
+    so a long-lived SSE handler would hang the test. The broadcaster
+    IS the mechanism; the HTTP wire format is covered by the unit tests
+    in ``backend/tests/test_broadcaster.py``.
+    """
+    broadcaster = stack.container.broadcaster
+    assert broadcaster is not None, "P2.4: broadcaster must be wired on the container"
+
+    # Subscribe BEFORE triggering. ``publish_nowait`` drops events for
+    # subscribers that don't exist yet, so registration must happen first.
+    async with broadcaster.subscribe() as q:
+        event = LogEvent(
+            source_file="manual",
+            line_content="ERROR: SSE test",
+            timestamp=datetime.now(timezone.utc),
+            matched_pattern="manual",
+        )
+        incident = await stack.orchestrator.handle_event(event)
+        assert incident is not None
+
+        received: list[dict] = []
+        # Drain the queue — we know exactly two events were published.
+        for _ in range(2):
+            evt = await asyncio.wait_for(q.get(), timeout=2.0)
+            assert evt is not None, "unexpected shutdown sentinel"
+            received.append(evt)
+
+    kinds = [e["kind"] for e in received]
+    assert "incident.created" in kinds, f"no incident.created in {kinds}"
+    assert "incident.updated" in kinds, f"no incident.updated in {kinds}"
+    # Both events refer to the same incident.
+    ids = {e["incident"]["id"] for e in received}
+    assert ids == {incident.id}
+    # The updated frame carries the terminal state.
+    updated = next(e for e in received if e["kind"] == "incident.updated")
+    assert updated["incident"]["state"] == incident.state.value
+
+
 @pytest.mark.asyncio
 async def test_fn_storm_dedup(stack: LiveStack):
     """E2E CONC-03 preview: 10 identical triggers in rapid succession yield 1 incident after dedup.

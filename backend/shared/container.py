@@ -65,6 +65,9 @@ class ServiceContainer:
     # P2.2: pluggable OSS secrets provider (env/file/sops/vault).
     secrets: Any = None           # backend.shared.secrets.ISecretsProvider
 
+    # P2.4: in-process SSE fan-out for live incident updates.
+    broadcaster: Any = None       # backend.api.broadcaster.IncidentBroadcaster
+
     # Watcher->orchestrator dispatch task (owned by the container so
     # shutdown can cancel it cleanly).
     watcher_task: Optional[asyncio.Task] = None
@@ -92,7 +95,14 @@ class ServiceContainer:
             except Exception:  # pragma: no cover
                 logger.exception("watcher shutdown failed")
 
-        # 3) Dispose the DB engine (if any) last so any in-flight
+        # 3) Close the broadcaster so in-flight SSE subscribers unblock.
+        if self.broadcaster is not None:
+            try:
+                await self.broadcaster.close()
+            except Exception:  # pragma: no cover
+                logger.exception("broadcaster close failed")
+
+        # 4) Dispose the DB engine (if any) last so any in-flight
         #    shutdown writes from 1+2 can still persist.
         if self.database is not None:
             try:

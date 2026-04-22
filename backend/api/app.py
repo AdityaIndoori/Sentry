@@ -365,6 +365,102 @@ def _register_routes(app: FastAPI) -> None:
             return JSONResponse(status_code=503, content=payload)
         return payload
 
+    # ──────────────────────────────────────────────────────────────
+    # P2.4: SSE live incident feed
+    # ──────────────────────────────────────────────────────────────
+
+    @app.get(
+        "/api/stream/incidents",
+        dependencies=[Depends(require_scope("incidents:read"))],
+    )
+    async def stream_incidents(request: Request):
+        """Server-Sent Events feed of live incident state transitions.
+
+        Every connected client receives one SSE message per incident
+        state change (``incident.created`` when the orchestrator
+        accepts an event, ``incident.updated`` on every terminal
+        state — RESOLVED / IDLE / ESCALATED). Replaces the 5-second
+        polling loop in the dashboard.
+
+        Transport: SSE (``text/event-stream``). No third-party
+        dependency — we hand-roll the wire format so the only thing
+        the frontend needs is the browser's built-in ``EventSource``.
+
+        Heartbeat: every 15 s a comment line ``: keepalive\\n\\n`` is
+        emitted so HTTP proxies don't drop the idle connection.
+
+        Authorization: the ``incidents:read`` scope is required, same
+        as ``/api/incidents``. When the auth registry is empty
+        (dev mode) the middleware bypasses the check.
+        """
+        import asyncio as _asyncio
+        import json as _json
+
+        container = _get_container(request)
+        broadcaster = container.broadcaster if container is not None else None
+        if broadcaster is None:  # pragma: no cover — defensive; always wired in prod
+            raise HTTPException(503, "broadcaster not initialized")
+
+        HEARTBEAT_SECONDS = 15.0
+
+        async def event_stream():
+            # Subscribe inside the generator so the queue's lifetime is
+            # tied to the response stream itself.
+            async with broadcaster.subscribe() as queue:
+                # Send an initial connect frame so the client can flip
+                # its "connected" indicator without having to wait for
+                # the first incident.
+                yield (
+                    "event: connected\n"
+                    f"data: {_json.dumps({'ok': True})}\n\n"
+                ).encode("utf-8")
+
+                while True:
+                    # Disconnect detection: starlette marks the request
+                    # disconnected via ``is_disconnected()``; we also
+                    # break on the broadcaster's ``None`` sentinel
+                    # (published on shutdown).
+                    if await request.is_disconnected():
+                        return
+                    try:
+                        event = await _asyncio.wait_for(
+                            queue.get(), timeout=HEARTBEAT_SECONDS,
+                        )
+                    except _asyncio.TimeoutError:
+                        # No event this window — send a heartbeat comment.
+                        yield b": keepalive\n\n"
+                        continue
+
+                    if event is None:
+                        # Shutdown sentinel from broadcaster.close().
+                        return
+
+                    # Default SSE event name comes from ``kind`` so
+                    # clients can register separate listeners via
+                    # ``es.addEventListener("incident.updated", ...)``.
+                    kind = event.get("kind", "incident")
+                    try:
+                        data = _json.dumps(event, default=str)
+                    except Exception:  # pragma: no cover
+                        data = _json.dumps({"kind": kind})
+                    yield (
+                        f"event: {kind}\n"
+                        f"data: {data}\n\n"
+                    ).encode("utf-8")
+
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                # Proxy-friendly headers — keep the tunnel open.
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                # Turn off nginx / cloudflare response buffering.
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     @app.get(
         "/api/status",
         dependencies=[Depends(require_scope("incidents:read"))],

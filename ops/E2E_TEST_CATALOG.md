@@ -199,7 +199,7 @@ feature in P1–P3 adds rows here.
 
 ---
 
-## Test Scoreboard (as of P2.3a completion)
+## Test Scoreboard (as of P2.4 completion)
 
 Last full run command:
 
@@ -207,7 +207,28 @@ Last full run command:
 cmd /v:on /c "set SENTRY_E2E=1&& python -m pytest backend/tests/ --no-cov -q"
 ```
 
-Combined unit + E2E: **673 passed / 7 skipped / 1 xfailed / 0 failed**.
+Combined unit + E2E: **684 passed / 7 skipped / 1 xfailed / 0 failed**.
+
+P2.4 delta: **+11 net pass** (10 unit + 1 E2E) —
+
+* **FN-20** — new E2E
+  `test_fn20_broadcaster_fires_on_incident_lifecycle`: orchestrator
+  publishes ``incident.created`` + ``incident.updated`` to the in-process
+  ``IncidentBroadcaster`` for every state transition. Verifies both
+  events carry the same incident id and the updated frame reflects the
+  terminal state (``resolved`` / ``idle`` / ``escalated``).
+* **TestIncidentBroadcaster** (new 10-test class in
+  ``backend/tests/test_broadcaster.py``) — locks in the fan-out contract:
+  single / multi subscriber, drop-new on full queue, slow-subscriber
+  isolation, close + post-close publish-is-noop, subscribe-after-close
+  yields a silent queue, default queue capacity lower bound.
+* **Route:** new ``GET /api/stream/incidents`` SSE endpoint
+  (``text/event-stream`` with 15 s keepalive and ``event: connected``
+  hello frame). Hand-rolled — zero new dependencies. Guarded by
+  ``incidents:read`` scope; terminates on broadcaster shutdown
+  sentinel or client disconnect.
+* Frontend ``useIncidentStream`` hook and polling removal are deferred
+  to P3.1 — the backend wire format is stable.
 
 P2.3a delta: **one xfail flipped, +1 net pass** —
 
