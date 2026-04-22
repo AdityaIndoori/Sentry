@@ -448,12 +448,34 @@ Sequence changes to minimize merge conflicts, keep tests green at every step, an
    - **Exit criteria met.** Full suite: **615 passed / 6 skipped / 5 xfailed / 0 failed** (was 603/6/6/0 at P1.3).
    - *Note on LLM-call credentials:* the original P1.4 spec also mentioned a credential wrapper around LLM calls. That stays deferred into P2.2 (secrets backend), because once secrets come from a proper secrets provider the natural place to attach a per-call scope is the `ILLMClient` wrapper that reads the API key from `ISecretsProvider`, not an orthogonal vault layer. Documented here to avoid scope creep.
 
-7. **P2.1 — Auth.**
-   - `Principal`, `ApiTokenRow`, `AuthMiddleware`, `require_scope`.
-   - Seed-token bootstrap script.
-   - Protect every endpoint. Unauthenticated health check only.
-   - Update frontend to send bearer token.
-   - **Exit criteria:** unauth 401 / wrong-scope 403 / revoked-token 401 integration tests green.
+7. **P2.1 — Auth. [✓ DONE]**
+   - ✅ `backend/shared/principal.py` — `Principal` frozen dataclass + `hash_token`, `constant_time_equals`, `generate_token` helpers. ``"*"`` scope = admin wildcard.
+   - ✅ `backend/api/auth.py`:
+     * `TokenRegistry` — in-memory ``sha256(raw) → Principal`` + separate revocation set. Tokens never stored in plain text. Thread-safe via `threading.Lock`.
+     * `AuthMiddleware` — runs before every non-`/api/health` route. Matrix: no header → 401 (auth on) / passthrough (dev); bad header → 400; `?token=` in query → 400 (SEC-04); unknown → 401 (auth on) / passthrough (dev); revoked → 401; valid → attaches `request.state.principal`.
+     * `require_scope(*scopes)` — FastAPI dependency factory: 401 if no principal when auth enabled, 403 on missing scope, no-op when registry empty (dev mode).
+     * `seed_tokens_from_settings` — converts legacy `API_AUTH_TOKEN` env var into a default admin principal at startup.
+   - ✅ `backend/shared/container.py` — new `auth_tokens: TokenRegistry` field.
+   - ✅ `backend/shared/factory.py` — `build_container` instantiates the registry and seeds it from `settings.api_auth_token` so production `docker compose up` with `API_AUTH_TOKEN` set auto-enforces auth, while dev runs (no token) remain open.
+   - ✅ `backend/api/app.py`:
+     * `AuthMiddleware` registered in `create_app` (order matters — outer `RequestIDMiddleware`, then `AuthMiddleware`, then CORS).
+     * Every route except `/api/health` gets `dependencies=[Depends(require_scope(...))]` with an appropriate scope: `incidents:read` for GET, `incidents:trigger` for POST /api/trigger, `watcher:control` for watcher start/stop.
+   - ✅ **Auth is auto-disabled when the registry is empty.** The ~500 existing unit/E2E tests that don't provision a token continue to pass in "dev mode"; only the explicitly-auth-enabled tests (SEC-01..04) exercise the 401/403/400 paths.
+   - ✅ **SEC-01, SEC-02, SEC-03 flipped xfail → passing.** New tests added:
+     * `test_sec01_unauthenticated_trigger_is_rejected` — 401 when no header.
+     * `test_sec01b_unauthenticated_read_is_rejected` — read endpoints also demand a token.
+     * `test_sec01c_health_is_open_even_with_auth_enabled` — `/api/health` exempt for liveness probes.
+     * `test_sec02_wrong_scope_is_rejected` — read-only token → 403 on POST /api/trigger.
+     * `test_sec02b_correct_scope_is_accepted` — admin token (scope `*`) accepted.
+     * `test_sec03_revoked_token_is_rejected` — 401 with "revoked" in body.
+     * `test_sec04_token_in_query_is_rejected` — 400 (prevents access-log leakage; new scenario beyond the xfail suite).
+     * `test_sec04b_malformed_authorization_header_rejected` — wrong scheme → 400.
+   - ✅ New `backend/tests/test_auth.py` (28 unit tests) covering `Principal.has_scope`, `hash_token` determinism, `constant_time_equals`, `generate_token`, `TokenRegistry` add/resolve/revoke/clear/re-add/no-plaintext-storage, `seed_tokens_from_settings` on empty / populated / attr-missing settings, and `require_scope` for dev-mode / 401 / 403 / matching / wildcard / multi-scope paths.
+   - **Deferred to later phases (documented honestly):**
+     * Postgres-backed `ApiTokenRow` persistence (the ORM row already exists from P1.2, but DB-session wiring moves to P2.2 alongside the secrets provider). Until then every deployment has exactly one token from `API_AUTH_TOKEN`.
+     * Seed-token CLI (`python -m backend.scripts.create_admin_token`) also moves to P2.2.
+     * Frontend bearer-token integration → P3.1.
+   - **Exit criteria met.** Full suite: **651 passed / 6 skipped / 2 xfailed / 0 failed** (was 615/6/5/0 at P1.4).
 
 8. **P2.2 — Secrets (open-source only).**
    - `ISecretsProvider` with four OSS implementations: `EnvSecrets` (dev), `FileSecrets` (docker-compose `secrets:` / tmpfs), `SopsSecrets` (sops+age encrypted YAML — fully offline, GitOps-friendly), `VaultSecrets` (HashiCorp Vault OSS / OpenBao via `hvac`). Swappable via `SECRETS_BACKEND=env|file|sops|vault`.

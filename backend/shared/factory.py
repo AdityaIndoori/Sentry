@@ -47,6 +47,7 @@ def build_container(
     """
     # Imports are local so that ``import backend.shared.factory`` is
     # cheap and doesn't eagerly pull in the Anthropic SDK etc.
+    from backend.api.auth import TokenRegistry, seed_tokens_from_settings
     from backend.memory.store import JSONMemoryStore
     from backend.orchestrator.engine import Orchestrator
     from backend.orchestrator.llm_client import create_llm_client
@@ -129,6 +130,14 @@ def build_container(
     )
     watcher = LogWatcher(config.watcher)
 
+    # ── P2.1: bearer-token registry ─────────────────────────────────────
+    #
+    # Empty registry → auth disabled ("dev mode"). Tests that want to
+    # exercise auth flows populate this in their fixtures.
+    # ``API_AUTH_TOKEN`` in the environment seeds a default admin token.
+    auth_tokens = TokenRegistry()
+    seed_tokens_from_settings(settings, auth_tokens)
+
     container = ServiceContainer(
         settings=settings,
         config=config,
@@ -146,6 +155,7 @@ def build_container(
         watcher=watcher,
         database=database,
         incident_repo=incident_repo,
+        auth_tokens=auth_tokens,
     )
 
     logger.info(

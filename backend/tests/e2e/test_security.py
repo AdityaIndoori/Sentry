@@ -43,31 +43,143 @@ def _issue_cred(stack: LiveStack, role: AgentRole, tool_name: str) -> JITCredent
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Auth — SEC-01..04  (pending P2.1)
+# Auth — SEC-01..04  (P2.1)
 # ══════════════════════════════════════════════════════════════════════
+#
+# These tests enable bearer-token auth by seeding the container's
+# ``auth_tokens`` registry. When the registry has at least one token,
+# :class:`AuthMiddleware` enforces auth on every non-``/api/health``
+# route. Tests that don't touch the registry (see the 30+ other SEC-*
+# and FN-* tests below) keep running in dev mode.
 
 
-@pytest.mark.xfail(strict=True, reason="P2.1: bearer-token auth not yet implemented")
+from backend.shared.principal import Principal
+
+
+@pytest.fixture
+def auth_stack(stack: LiveStack):
+    """Stack with auth enabled: one admin + one read-only + one revoked token."""
+    registry = stack.container.auth_tokens
+    registry.clear()
+
+    registry.add(
+        "admin-token-sec01",
+        Principal(
+            id="admin-sec01",
+            name="admin-sec01",
+            role="admin",
+            scopes=frozenset({"*"}),
+        ),
+    )
+    registry.add(
+        "readonly-token-sec02",
+        Principal(
+            id="read-sec02",
+            name="read-sec02",
+            role="read_only",
+            scopes=frozenset({"incidents:read"}),
+        ),
+    )
+    registry.add(
+        "to-be-revoked-sec03",
+        Principal(
+            id="rev-sec03",
+            name="rev-sec03",
+            role="admin",
+            scopes=frozenset({"*"}),
+        ),
+    )
+    registry.revoke("to-be-revoked-sec03")
+    yield stack
+    registry.clear()
+
+
+@pytest.fixture
+def auth_api_client(auth_stack, api_client_factory):
+    """An API client that talks to the auth-enabled stack.
+
+    Uses the existing ``api_client_factory`` fixture so teardown
+    (awaiting ``aclose()``) happens uniformly.
+    """
+    return api_client_factory(auth_stack)
+
+
 @pytest.mark.asyncio
-async def test_sec01_unauthenticated_trigger_is_rejected(api_client):
-    """E2E SEC-01: POST /api/trigger with no Authorization header → 401."""
-    r = await api_client.post("/api/trigger", json={"message": "hi"})
+async def test_sec01_unauthenticated_trigger_is_rejected(auth_api_client):
+    """E2E SEC-01: POST /api/trigger with no Authorization header -> 401."""
+    r = await auth_api_client.post("/api/trigger", json={"message": "hi"})
+    assert r.status_code == 401, r.text
+    assert "authentication" in r.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_sec01b_unauthenticated_read_is_rejected(auth_api_client):
+    """E2E SEC-01b: Read endpoints also demand a token when auth is enabled."""
+    r = await auth_api_client.get("/api/incidents")
     assert r.status_code == 401
 
 
-@pytest.mark.xfail(strict=True, reason="P2.1: scope enforcement not yet implemented")
 @pytest.mark.asyncio
-async def test_sec02_wrong_scope_is_rejected(api_client):
-    """E2E SEC-02: token with read-only scope can't hit /api/trigger."""
-    # When P2.1 ships, this test will pass a read-only token and assert 403.
-    assert False  # placeholder
+async def test_sec01c_health_is_open_even_with_auth_enabled(auth_api_client):
+    """E2E SEC-01c: /api/health is deliberately open so liveness probes
+    work before secrets are provisioned."""
+    r = await auth_api_client.get("/api/health")
+    assert r.status_code == 200
 
 
-@pytest.mark.xfail(strict=True, reason="P2.1: token revocation table not yet implemented")
 @pytest.mark.asyncio
-async def test_sec03_revoked_token_is_rejected(api_client):
-    """E2E SEC-03: revoked token returns 401."""
-    assert False  # placeholder
+async def test_sec02_wrong_scope_is_rejected(auth_api_client):
+    """E2E SEC-02: read-only token cannot POST /api/trigger -> 403."""
+    r = await auth_api_client.post(
+        "/api/trigger",
+        json={"message": "hi"},
+        headers={"Authorization": "Bearer readonly-token-sec02"},
+    )
+    assert r.status_code == 403, r.text
+    assert "scope" in r.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_sec02b_correct_scope_is_accepted(auth_api_client):
+    """E2E SEC-02b: admin token with scope '*' is accepted on /api/trigger."""
+    r = await auth_api_client.post(
+        "/api/trigger",
+        json={"message": "ERROR: sec02b admin-token test"},
+        headers={"Authorization": "Bearer admin-token-sec01"},
+    )
+    assert r.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_sec03_revoked_token_is_rejected(auth_api_client):
+    """E2E SEC-03: revoked token -> 401."""
+    r = await auth_api_client.post(
+        "/api/trigger",
+        json={"message": "hi"},
+        headers={"Authorization": "Bearer to-be-revoked-sec03"},
+    )
+    assert r.status_code == 401, r.text
+    assert "revoked" in r.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_sec04_token_in_query_is_rejected(auth_api_client):
+    """E2E SEC-04: token in the URL query string -> 400 (leakage prevention)."""
+    r = await auth_api_client.get(
+        "/api/incidents?token=admin-token-sec01",
+    )
+    assert r.status_code == 400
+    assert "query" in r.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_sec04b_malformed_authorization_header_rejected(auth_api_client):
+    """E2E SEC-04b: wrong scheme ('Basic foo') -> 400."""
+    r = await auth_api_client.get(
+        "/api/incidents",
+        headers={"Authorization": "Basic foo"},
+    )
+    assert r.status_code == 400
 
 
 # ══════════════════════════════════════════════════════════════════════

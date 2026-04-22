@@ -199,7 +199,7 @@ feature in P1–P3 adds rows here.
 
 ---
 
-## Test Scoreboard (as of P1.4 completion)
+## Test Scoreboard (as of P2.1 completion)
 
 Last full run command:
 
@@ -207,7 +207,29 @@ Last full run command:
 cmd /v:on /c "set SENTRY_E2E=1&& python -m pytest backend/tests/ --no-cov -q"
 ```
 
-Combined unit + E2E: **615 passed / 6 skipped / 5 xfailed / 0 failed**.
+Combined unit + E2E: **651 passed / 6 skipped / 2 xfailed / 0 failed**.
+
+P2.1 delta: **36 new tests passing, three xfails flipped** —
+
+* **SEC-01..03** xfails → passing: unauthenticated request → 401,
+  wrong scope → 403, revoked token → 401.
+* **SEC-04** (new) — token in URL query string → 400 (access-log
+  leakage prevention).
+* **SEC-04b** (new) — malformed Authorization header → 400.
+* **SEC-01b / SEC-01c / SEC-02b** (new) — read-path demands auth,
+  `/api/health` stays open, valid admin `*` scope is accepted.
+* **TestPrincipal / TestHashToken / TestConstantTimeEquals /
+  TestGenerateToken / TestTokenRegistry / TestSeedTokensFromSettings /
+  TestRequireScope** — 28 new unit tests in `backend/tests/test_auth.py`
+  covering every building block (scope matching, sha256 token hashing,
+  no-plaintext storage, revoke/re-add flows, dev-mode pass-through,
+  401/403 branches, multi-scope enforcement).
+
+Auth is **auto-disabled when the token registry is empty**, which is
+why the 500+ existing unit / E2E tests that don't provision a token
+remain green without modification. Production `docker compose up`
+with ``API_AUTH_TOKEN`` set auto-enforces auth on every route except
+``/api/health``.
 
 P1.4 delta: **twelve new tests passing, one xfail flipped** —
 
@@ -246,15 +268,15 @@ Postgres in CI / docker-compose. Alembic migration verified with
 | Suite | Pass | Skip | XFail | Fail |
 |------|-----:|-----:|------:|-----:|
 | test_functional.py (20 scenarios) | 16 | 1 | 2 | 0 |
-| test_security.py (35 scenarios) | 27 | 5 | 3 | 0 |
+| test_security.py (43 scenarios) | 35 | 5 | 0 | 0 |
 | test_concurrency.py (5 scenarios) | 3 | 0 | 2 | 0 |
-| **Total** | **46** | **6** | **7** | **0** |
+| **Total** | **54** | **6** | **4** | **0** |
 
 Skips come from environment gating (Docker Desktop not running on dev
 machines — SEC-06 symlink on Windows, SEC-35..38 Docker hardening). Under
-`docker compose up -d` the Docker tests run green. All 5 suite-level
-xfails are gated on future phases (P2.1 auth × 3, P1.1 fingerprint
-boot × 1, P2.3 readiness × 1) — none indicate unaddressed bugs.
+`docker compose up -d` the Docker tests run green. The 2 remaining
+suite-level xfails are gated on future phases (P1.1 fingerprint boot
+× 1, P2.3 readiness × 1) — none indicate unaddressed bugs.
 
 P1.1 delta: **SEC-41 `X-Request-ID`** flipped from xfail to passing — the
 E2E app now goes through `backend.api.app.create_app(container=...)` so

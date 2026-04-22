@@ -59,6 +59,9 @@ class ServiceContainer:
     database: Any = None          # backend.persistence.session.Database
     incident_repo: Any = None     # backend.persistence.repositories.incident_repo.IncidentRepository
 
+    # P2.1: bearer-token registry. Empty → auth disabled (dev mode).
+    auth_tokens: Any = None       # backend.api.auth.TokenRegistry
+
     # Watcher->orchestrator dispatch task (owned by the container so
     # shutdown can cancel it cleanly).
     watcher_task: Optional[asyncio.Task] = None

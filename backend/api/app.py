@@ -36,11 +36,12 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from backend.api.auth import AuthMiddleware, require_scope
 from backend.shared.config import LLMProvider
 from backend.shared.container import ServiceContainer
 from backend.shared.factory import build_container
@@ -241,9 +242,14 @@ def create_app(container: Optional[ServiceContainer] = None) -> FastAPI:
         allow_origins=["http://localhost:3000", "http://localhost:5173"],
         allow_credentials=True,
         allow_methods=["GET", "POST"],
-        allow_headers=["*", "X-Request-ID"],
+        allow_headers=["*", "X-Request-ID", "Authorization"],
         expose_headers=["X-Request-ID"],
     )
+    # Order matters: middleware is applied LIFO, so the last one added
+    # is the first to run on a request. We want (outermost → innermost):
+    # RequestIDMiddleware → AuthMiddleware → CORS → route handler.
+    # So we add CORS, then Auth, then RequestID.
+    app.add_middleware(AuthMiddleware)
     app.add_middleware(RequestIDMiddleware)
 
     _register_routes(app)
@@ -265,7 +271,10 @@ def _register_routes(app: FastAPI) -> None:
     async def health():
         return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
 
-    @app.get("/api/status")
+    @app.get(
+        "/api/status",
+        dependencies=[Depends(require_scope("incidents:read"))],
+    )
     async def get_status(request: Request):
         orch = _pick(request, "orchestrator", "_orchestrator")
         watcher = _pick(request, "watcher", "_watcher")
@@ -275,7 +284,10 @@ def _register_routes(app: FastAPI) -> None:
         status["watcher_running"] = watcher._running if watcher else False
         return status
 
-    @app.get("/api/incidents")
+    @app.get(
+        "/api/incidents",
+        dependencies=[Depends(require_scope("incidents:read"))],
+    )
     async def get_incidents(request: Request):
         orch = _pick(request, "orchestrator", "_orchestrator")
         if not orch:
@@ -287,7 +299,10 @@ def _register_routes(app: FastAPI) -> None:
             "resolved": [i.to_dict() for i in resolved_list],
         }
 
-    @app.get("/api/incidents/{incident_id}")
+    @app.get(
+        "/api/incidents/{incident_id}",
+        dependencies=[Depends(require_scope("incidents:read"))],
+    )
     async def get_incident_detail(incident_id: str, request: Request):
         orch = _pick(request, "orchestrator", "_orchestrator")
         if not orch:
@@ -299,7 +314,10 @@ def _register_routes(app: FastAPI) -> None:
                 return inc.to_dict()
         raise HTTPException(404, f"Incident {incident_id} not found")
 
-    @app.post("/api/trigger")
+    @app.post(
+        "/api/trigger",
+        dependencies=[Depends(require_scope("incidents:trigger"))],
+    )
     async def trigger_event(req: TriggerEventRequest, request: Request):
         orch = _pick(request, "orchestrator", "_orchestrator")
         cfg = _pick(request, "config", "_config")
@@ -322,7 +340,10 @@ def _register_routes(app: FastAPI) -> None:
             return {"incident": incident.to_dict()}
         return {"incident": None, "message": "Circuit breaker active or event ignored"}
 
-    @app.get("/api/memory")
+    @app.get(
+        "/api/memory",
+        dependencies=[Depends(require_scope("incidents:read"))],
+    )
     async def get_memory(request: Request):
         orch = _pick(request, "orchestrator", "_orchestrator")
         if not orch:
@@ -335,14 +356,20 @@ def _register_routes(app: FastAPI) -> None:
             "fingerprint": await store.get_fingerprint(),
         }
 
-    @app.get("/api/tools")
+    @app.get(
+        "/api/tools",
+        dependencies=[Depends(require_scope("incidents:read"))],
+    )
     async def get_tools(request: Request):
         orch = _pick(request, "orchestrator", "_orchestrator")
         if not orch:
             raise HTTPException(503, "Not ready")
         return {"tools": orch._tools.get_tool_definitions()}
 
-    @app.post("/api/watcher/start")
+    @app.post(
+        "/api/watcher/start",
+        dependencies=[Depends(require_scope("watcher:control"))],
+    )
     async def start_watcher(request: Request):
         global _watcher_task
         watcher = _pick(request, "watcher", "_watcher")
@@ -370,7 +397,10 @@ def _register_routes(app: FastAPI) -> None:
                 _watcher_task = task
             return {"status": "started"}
 
-    @app.post("/api/watcher/stop")
+    @app.post(
+        "/api/watcher/stop",
+        dependencies=[Depends(require_scope("watcher:control"))],
+    )
     async def stop_watcher(request: Request):
         global _watcher_task
         watcher = _pick(request, "watcher", "_watcher")
@@ -391,7 +421,10 @@ def _register_routes(app: FastAPI) -> None:
                 _watcher_task = None
             return {"status": "stopped"}
 
-    @app.get("/api/config")
+    @app.get(
+        "/api/config",
+        dependencies=[Depends(require_scope("incidents:read"))],
+    )
     async def get_config(request: Request):
         cfg = _pick(request, "config", "_config")
         if not cfg:
@@ -425,7 +458,10 @@ def _register_routes(app: FastAPI) -> None:
             "environment": cfg.environment,
         }
 
-    @app.get("/api/security")
+    @app.get(
+        "/api/security",
+        dependencies=[Depends(require_scope("incidents:read"))],
+    )
     async def get_security_status(request: Request):
         cfg = _pick(request, "config", "_config")
         if not cfg:
