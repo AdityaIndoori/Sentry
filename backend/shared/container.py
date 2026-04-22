@@ -62,6 +62,9 @@ class ServiceContainer:
     # P2.1: bearer-token registry. Empty → auth disabled (dev mode).
     auth_tokens: Any = None       # backend.api.auth.TokenRegistry
 
+    # P2.2: pluggable OSS secrets provider (env/file/sops/vault).
+    secrets: Any = None           # backend.shared.secrets.ISecretsProvider
+
     # Watcher->orchestrator dispatch task (owned by the container so
     # shutdown can cancel it cleanly).
     watcher_task: Optional[asyncio.Task] = None

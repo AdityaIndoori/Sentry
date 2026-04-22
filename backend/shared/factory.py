@@ -48,6 +48,7 @@ def build_container(
     # Imports are local so that ``import backend.shared.factory`` is
     # cheap and doesn't eagerly pull in the Anthropic SDK etc.
     from backend.api.auth import TokenRegistry, seed_tokens_from_settings
+    from backend.shared.secrets import build_secrets_provider
     from backend.memory.store import JSONMemoryStore
     from backend.orchestrator.engine import Orchestrator
     from backend.orchestrator.llm_client import create_llm_client
@@ -130,13 +131,36 @@ def build_container(
     )
     watcher = LogWatcher(config.watcher)
 
+    # ── P2.2: OSS secrets provider ──────────────────────────────────────
+    #
+    # Pluggable backend: ``env`` (default) / ``file`` / ``sops`` / ``vault``.
+    # When the operator picks a non-env backend, we also opportunistically
+    # lift the ``api_auth_token`` out of it so P2.1 auth gating switches on
+    # without also requiring the raw token to appear in the env var. This
+    # is the primary integration point for P2.2 — the rest of the codebase
+    # can keep reading ``settings.api_auth_token`` unmodified.
+    secrets_provider = build_secrets_provider(settings)
+
+    effective_settings = settings
+    if (not settings.api_auth_token) and secrets_provider is not None:
+        loaded = secrets_provider.get("api_auth_token")
+        if loaded:
+            # Settings is frozen; create a copy with the hydrated token.
+            from dataclasses import replace
+
+            effective_settings = replace(settings, api_auth_token=loaded)
+            logger.info(
+                "Auth: hydrated api_auth_token from secrets backend "
+                "(provider=%s)", secrets_provider.__class__.__name__,
+            )
+
     # ── P2.1: bearer-token registry ─────────────────────────────────────
     #
     # Empty registry → auth disabled ("dev mode"). Tests that want to
     # exercise auth flows populate this in their fixtures.
-    # ``API_AUTH_TOKEN`` in the environment seeds a default admin token.
+    # ``API_AUTH_TOKEN`` (env or secrets backend) seeds a default admin.
     auth_tokens = TokenRegistry()
-    seed_tokens_from_settings(settings, auth_tokens)
+    seed_tokens_from_settings(effective_settings, auth_tokens)
 
     container = ServiceContainer(
         settings=settings,
@@ -156,6 +180,7 @@ def build_container(
         database=database,
         incident_repo=incident_repo,
         auth_tokens=auth_tokens,
+        secrets=secrets_provider,
     )
 
     logger.info(
