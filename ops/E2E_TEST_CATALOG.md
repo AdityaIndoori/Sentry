@@ -199,7 +199,7 @@ feature in P1–P3 adds rows here.
 
 ---
 
-## Test Scoreboard (as of P4.1 + P4.2 + P4.3 + P4.4 + P4.5 + P4.6 + P4.7a + P4.7b + P4.8 + P4.9a + P4.9b + P4.9c + P4.9d + P4.9e)
+## Test Scoreboard (as of P4.1 + P4.2 + P4.3 + P4.4 + P4.5 + P4.6 + P4.7a + P4.7b + P4.8 + P4.9a + P4.9b + P4.9c + P4.9d + P4.9e + P4.9f)
 
 
 
@@ -238,6 +238,77 @@ Combined unit + E2E: **724 passed / 11 skipped / 1 xfailed / 0 failed**.
 | **P4.9c (retire backend.orchestrator.* override + promote)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (no new tests — type-system tightening) |
 | **P4.9d (IAuditLog Protocol — retire audit_log type split)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (no new tests — type-system tightening) |
 | **P4.9e (retire backend.api.app override + promote)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (no new tests — type-system tightening; OpenAPI snapshot unchanged) |
+| **P4.9f (CI mypy hard-fail flip)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (no new tests — 1-line CI workflow change; the **CI-hardening deliverable is complete**, every subsequent PR has a type-check gate) |
+
+### P4.9f delta (CI ``|| true`` → hard-fail — the capstone)
+
+Sixth and final slice of the CI-hardening sweep. One-line change
+to ``.github/workflows/ci.yml`` flips the mypy step from soft-fail
+(``mypy … || true``) to hard-fail — every PR must now pass
+``python -m mypy backend/ --ignore-missing-imports`` or the merge
+is blocked.
+
+This is the capstone: P4.9a..P4.9e drained the annotation backlog
+in the five relaxing mypy override blocks
+(``backend.agents.*``, ``backend.tools.*``,
+``backend.persistence.repositories.*``,
+``backend.orchestrator.*``, ``backend.api.app``) and promoted each
+to the strict-islands list. With those gone, the final
+``mypy backend/`` run on master is 0 errors / 100 source files
+checked, and enforcing that on every PR is now just a matter of
+dropping the soft-fail suffix.
+
+**Files touched:** ``.github/workflows/ci.yml`` only.
+
+**Kept intentionally:**
+
+* ``--ignore-missing-imports`` stays. Optional runtime dependencies
+  (``openai``, ``hvac``, ``opentelemetry-*``, etc.) don't always
+  ship type stubs at CI install time, and the project intentionally
+  tolerates their absence at runtime via ``try: import … except
+  ImportError``. Dropping this flag would fail CI on the optional-
+  stub absence, which is a separate decision with a separate
+  trade-off.
+* The ``backend.shared.*`` relaxing override in ``pyproject.toml``
+  stays. Its container / factory / models / config / constants /
+  prompts / security / vault / agent_throttle / ai_gateway /
+  audit_log / settings members are not all drained yet. Draining
+  them one module at a time (same slice pattern) is a future
+  sweep, out of scope for the CI-hardening deliverable.
+
+**Follow-up TODO in the workflow comment:** documents the exact
+procedure for adding a new strict module and for draining the
+remaining ``backend.shared.*`` override. Future PRs land in that
+same pattern.
+
+**Verification:**
+
+* Local run of the exact CI command:
+    ``python -m mypy backend/ --ignore-missing-imports`` exits
+    **0** (``Success: no issues found in 100 source files``).
+* ``python -m ruff check backend/`` → clean.
+* Full suite from P4.9e (unchanged by this commit): **724 passed
+  / 11 skipped / 1 xfailed / 0 failed**.
+
+**CI-hardening workstream — recap of the six slices:**
+
+1. **P4.9a** — agents + tools generics sweep (34 strict errors → 0,
+   11 modules promoted to strict-islands).
+2. **P4.9b** — persistence.repositories generics sweep (14 strict
+   errors → 0, 3 modules promoted).
+3. **P4.9c** — retired ``backend.orchestrator.*`` override
+   (orchestrator × 4 modules promoted, 31 → 35 strict-islands).
+4. **P4.9d** — ``IAuditLog`` Protocol unifies the factory's
+   dual-backend audit-log type (3 factory errors → 0, Protocol
+   added to ``shared.interfaces``).
+5. **P4.9e** — retired ``backend.api.app`` override (13 errors →
+   0, 900-line gateway fully annotated, OpenAPI snapshot verified
+   unchanged, 35 → 36 strict-islands).
+6. **P4.9f** — this slice: CI ``|| true`` removed.
+
+**State at close:** 36 strict-islands modules, 1 relaxing override
+left (``backend.shared.*``), 0 full-backend mypy errors, CI mypy
+step is a hard gate on every PR.
 
 ### P4.9e delta (retire ``backend.api.app`` override + strict-islands promote)
 

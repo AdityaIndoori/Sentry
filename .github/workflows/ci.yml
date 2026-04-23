@@ -59,19 +59,37 @@ jobs:
         run: ruff check backend/ --output-format=github
 
       - name: Mypy (typecheck)
-        # P3.4c: pyproject.toml now enables ``disallow_untyped_defs`` +
-        # ``disallow_any_generics`` globally, with per-module overrides
-        # relaxing strict mode for packages that still have a backlog
-        # (agents, tools, orchestrator, api routes, watcher, mcp_tools,
-        # services, shared-legacy). Strict-mode "islands" are listed
-        # explicitly at the bottom of ``[tool.mypy]`` — adding a module
-        # there is a one-line commitment to keep it clean.
+        # P4.9f: CI mypy is now **hard-fail**. Every PR must pass
+        # ``mypy backend/ --ignore-missing-imports`` or the merge is
+        # blocked. The P4.9a..P4.9e sweep drained every meaningful
+        # annotation backlog:
         #
-        # Once a package is fully annotated, delete its override block
-        # and promote it to the strict-islands list. When every override
-        # is gone, drop the ``|| true`` below and the ``--ignore-missing-
-        # imports`` flag so CI hard-fails on any violation.
-        run: mypy backend/ --ignore-missing-imports || true
+        #   * P4.9a — ``backend.agents.*`` + ``backend.tools.*`` generics
+        #   * P4.9b — ``backend.persistence.repositories.*`` generics
+        #   * P4.9c — retired ``backend.orchestrator.*`` override
+        #   * P4.9d — ``IAuditLog`` Protocol retires the factory's
+        #             audit_log type split
+        #   * P4.9e — retired ``backend.api.app`` override, 900-line
+        #             gateway is fully annotated + OpenAPI snapshot
+        #             verified unchanged
+        #
+        # Only the legacy ``backend.shared.*`` override remains (its
+        # container / factory / models / config / constants / prompts /
+        # security / vault / agent_throttle / ai_gateway / audit_log /
+        # settings modules are not all drained yet — that's a future
+        # sweep, out of scope for CI-hardening). The ``--ignore-missing-
+        # imports`` flag stays because optional dependencies (openai,
+        # hvac, opentelemetry-*) don't always ship type stubs at CI
+        # install time.
+        #
+        # To add a new strict module: fix it, run
+        # ``python -m mypy backend/ --ignore-missing-imports`` locally,
+        # and add it to the ``strict-islands`` list in ``pyproject.toml``.
+        # To retire the remaining ``backend.shared.*`` relaxing
+        # override: drain each module one at a time using the same
+        # slice pattern (one commit per module), then delete the
+        # override block + promote to strict-islands.
+        run: mypy backend/ --ignore-missing-imports
 
       - name: Pytest (unit + E2E)
         env:
