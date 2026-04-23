@@ -166,6 +166,8 @@ def test_openapi_has_expected_top_level_routes(openapi_spec: dict[str, Any]) -> 
         "/api/watcher/start",
         "/api/watcher/stop",
         "/api/stream/incidents",
+        # P4.6 — REST token-management endpoints.
+        "/api/tokens",
     }
     missing = expected - set(paths.keys())
     assert not missing, f"OpenAPI spec is missing expected routes: {missing}"

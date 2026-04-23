@@ -1,6 +1,28 @@
 {
   "components": {
     "schemas": {
+      "CreateTokenRequest": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "default": "operator",
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "scopes"
+        ],
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -144,6 +166,46 @@
         "request_body_required": false,
         "response_codes": [
           "200"
+        ]
+      }
+    },
+    "/api/tokens": {
+      "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "include_revoked",
+            "required": false
+          }
+        ],
+        "request_body_required": false,
+        "response_codes": [
+          "200",
+          "422"
+        ]
+      },
+      "post": {
+        "parameters": [],
+        "request_body_required": true,
+        "response_codes": [
+          "201",
+          "422"
+        ]
+      }
+    },
+    "/api/tokens/{token_id}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "token_id",
+            "required": true
+          }
+        ],
+        "request_body_required": false,
+        "response_codes": [
+          "200",
+          "422"
         ]
       }
     },

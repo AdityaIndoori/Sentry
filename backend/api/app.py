@@ -207,7 +207,22 @@ class ModeChangeRequest(BaseModel):
     mode: str  # ACTIVE, AUDIT, DISABLED
 
 
+class CreateTokenRequest(BaseModel):
+    """Body for ``POST /api/tokens``.
+
+    ``scopes`` is a comma-friendly list; ``["*"]`` means admin.
+    ``role`` is one of ``"admin" | "operator" | "read_only"`` — it's
+    descriptive metadata, the actual authorization check is on
+    ``scopes``.
+    """
+
+    name: str
+    role: str = "operator"
+    scopes: list[str]
+
+
 # ─── App factory ────────────────────────────────────────────────────────────
+
 
 
 def create_app(container: ServiceContainer | None = None) -> FastAPI:
@@ -241,7 +256,9 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         CORSMiddleware,
         allow_origins=["http://localhost:3000", "http://localhost:5173"],
         allow_credentials=True,
-        allow_methods=["GET", "POST"],
+        # DELETE added in P4.6 so the dashboard can revoke tokens
+        # through /api/tokens/{id} without a CORS preflight rejection.
+        allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["*", "X-Request-ID", "Authorization"],
         expose_headers=["X-Request-ID"],
     )
@@ -747,8 +764,151 @@ def _register_routes(app: FastAPI) -> None:
             "circuit_breaker": orch._cb.get_status() if orch else {},
         }
 
+    # ──────────────────────────────────────────────────────────────
+    # P4.6: REST token-management surface
+    #
+    # These mirror the three operator CLIs (``create_admin_token``,
+    # ``revoke_token``, ``list_tokens``) so that operators can manage
+    # API tokens through the dashboard or curl without shelling into
+    # the container. Every route is gated on the ``admin:tokens``
+    # scope, which is distinct from ``*`` (a general admin wildcard
+    # still matches because of :meth:`Principal.has_scope`, but a
+    # narrowly-scoped "operator" token cannot touch the registry
+    # unless you grant it ``admin:tokens`` explicitly).
+    #
+    # Raw tokens are NEVER returned from ``GET /api/tokens`` — only
+    # the ``id`` + metadata. Raw tokens ARE returned exactly once
+    # from ``POST /api/tokens``; losing that response means the
+    # operator has to mint a new one (same contract as the CLI).
+    # ──────────────────────────────────────────────────────────────
+
+    def _require_token_repo(request: Request):
+        """Pull ``(registry, token_repo)`` off the container.
+
+        Both are always wired together by :mod:`backend.shared.factory`.
+        If either is missing we return 503 because an operator
+        trying to manage tokens without a persistent store would
+        produce state that disappears on restart.
+        """
+        container = _get_container(request)
+        if container is None:
+            raise HTTPException(503, "Service container not initialized")
+        registry = getattr(container, "auth_tokens", None)
+        token_repo = getattr(container, "token_repo", None)
+        if registry is None or token_repo is None:
+            raise HTTPException(
+                503, "Token management is not available (no persistent token store)"
+            )
+        return registry, token_repo
+
+    @app.post(
+        "/api/tokens",
+        status_code=201,
+        dependencies=[Depends(require_scope("admin:tokens"))],
+    )
+    async def create_token(req: CreateTokenRequest, request: Request):
+        """Mint a fresh API token. Returns the raw token **once**."""
+        from backend.shared.principal import Principal, generate_token, hash_token
+
+        registry, token_repo = _require_token_repo(request)
+
+        name = req.name.strip()
+        if not name:
+            raise HTTPException(400, "name is required")
+        scopes = [s.strip() for s in req.scopes if s and s.strip()]
+        if not scopes:
+            raise HTTPException(400, "scopes must be a non-empty list")
+        role = req.role.strip().lower() or "operator"
+        if role not in {"admin", "operator", "read_only"}:
+            raise HTTPException(
+                400, f"role must be one of admin|operator|read_only (got {role!r})"
+            )
+
+        raw = generate_token()
+        token_hash = hash_token(raw)
+        token_id = token_hash[:12]
+
+        # Persist first so a crash between "add to registry" and "persist"
+        # can't leave us with an unsaved in-memory token.
+        stored = await token_repo.create(
+            token_id=token_id,
+            token_hash=token_hash,
+            name=name,
+            role=role,
+            scopes=scopes,
+        )
+
+        principal = Principal(
+            id=stored.id,
+            name=stored.name,
+            role=stored.role,
+            scopes=frozenset(stored.scopes),
+        )
+        registry.add(raw, principal)
+
+        return {
+            "id": stored.id,
+            "name": stored.name,
+            "role": stored.role,
+            "scopes": list(stored.scopes),
+            "created_at": stored.created_at.isoformat(),
+            # ⚠ raw token is surfaced exactly once — same contract as
+            # the CLI. Clients MUST persist this value out-of-band; a
+            # follow-up GET will only ever return the metadata.
+            "raw_token": raw,
+        }
+
+    @app.get(
+        "/api/tokens",
+        dependencies=[Depends(require_scope("admin:tokens"))],
+    )
+    async def list_tokens(request: Request, include_revoked: bool = False):
+        """List every persisted token (metadata only, never the raw value)."""
+        _registry, token_repo = _require_token_repo(request)
+        stored = await token_repo.list_all(include_revoked=include_revoked)
+        return {
+            "count": len(stored),
+            "tokens": [
+                {
+                    "id": t.id,
+                    "name": t.name,
+                    "role": t.role,
+                    "scopes": list(t.scopes),
+                    "created_at": t.created_at.isoformat(),
+                    "revoked_at": t.revoked_at.isoformat() if t.revoked_at else None,
+                    "is_revoked": t.is_revoked,
+                }
+                for t in stored
+            ],
+        }
+
+    @app.delete(
+        "/api/tokens/{token_id}",
+        dependencies=[Depends(require_scope("admin:tokens"))],
+    )
+    async def revoke_token(token_id: str, request: Request):
+        """Revoke ``token_id`` in both the DB and the in-memory registry."""
+        registry, token_repo = _require_token_repo(request)
+        stored = await token_repo.get(token_id)
+        if stored is None:
+            raise HTTPException(404, f"Token {token_id!r} not found")
+        if stored.is_revoked:
+            # Idempotency: revoking an already-revoked token is not a
+            # client error. Match the CLI's behaviour.
+            return {"id": token_id, "revoked": True, "already_revoked": True}
+
+        await token_repo.revoke(token_id)
+        # Mirror into the registry so the middleware hot path
+        # immediately rejects the token. ``revoke_by_hash`` uses the
+        # stored sha256 directly — we don't have the raw token to call
+        # the public ``revoke(raw)`` path.
+        registry.revoke_by_hash(stored.token_hash)
+
+        return {"id": token_id, "revoked": True, "already_revoked": False}
+
 
 # ─── Watcher event dispatch ─────────────────────────────────────────────────
+
 
 
 async def _watcher_event_loop(watcher=None, orchestrator=None):  # pragma: no cover

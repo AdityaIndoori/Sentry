@@ -199,7 +199,7 @@ feature in P1–P3 adds rows here.
 
 ---
 
-## Test Scoreboard (as of P4.1 + P4.2 + P4.3 + P4.4 + P4.5)
+## Test Scoreboard (as of P4.1 + P4.2 + P4.3 + P4.4 + P4.5 + P4.6)
 
 Last full run command:
 
@@ -207,7 +207,7 @@ Last full run command:
 cmd /v:on /c "set SENTRY_E2E=1&& python -m pytest backend/tests/ --no-cov -q -W ignore::DeprecationWarning"
 ```
 
-Combined unit + E2E: **706 passed / 9 skipped / 1 xfailed / 0 failed**.
+Combined unit + E2E: **718 passed / 9 skipped / 1 xfailed / 0 failed**.
 
 ### Scoreboard history
 
@@ -226,6 +226,28 @@ Combined unit + E2E: **706 passed / 9 skipped / 1 xfailed / 0 failed**.
 | P4.3 (vitest coverage expansion) | 704 passed / 9 skipped / 1 xfailed / 0 failed (frontend only — 12 new JS tests) |
 | **P4.4 (OpenAPI snapshot)** | **706 passed / 9 skipped / 1 xfailed / 0 failed** (+2) |
 | **P4.5 (mypy strict-island expansion + ruff fail-on-error)** | **706 passed / 9 skipped / 1 xfailed / 0 failed** (no new tests — pure lint/type tightening) |
+| **P4.6 (REST /api/tokens admin endpoints)** | **718 passed / 9 skipped / 1 xfailed / 0 failed** (+12) |
+
+### P4.6 delta
+
+* Three new admin-gated routes on ``backend/api/app.py``:
+  * ``POST   /api/tokens``        — mint a token; raw value returned **exactly once**.
+  * ``GET    /api/tokens``        — list metadata (``?include_revoked=true`` opt-in).
+  * ``DELETE /api/tokens/{id}``  — revoke in both the DB and the in-memory registry.
+* All three require the ``admin:tokens`` scope (a narrowly-scoped
+  ``operator`` token cannot touch the registry even if it has ``*`` on
+  read scopes). An operator-granted wildcard admin token still matches
+  via :meth:`Principal.has_scope`.
+* CORS ``allow_methods`` gains ``DELETE`` so the dashboard can issue
+  revocations without a preflight rejection.
+* OpenAPI snapshot re-seeded
+  (``backend/frontend_contract/openapi_snapshot.json``) and the sanity
+  check in ``test_openapi_snapshot.py`` now asserts ``/api/tokens`` is
+  in the public surface.
+* 12 new regression tests in ``backend/tests/test_token_api.py``
+  covering create/list/revoke, scope-gating (``admin:tokens``
+  required), raw-token-never-leaks-through-GET, idempotent-revoke,
+  and the "new token works immediately" smoke path.
 
 ### P4.5 delta (mypy + ruff enforcement)
 
