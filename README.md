@@ -52,8 +52,9 @@ flowchart TB
             ActiveTools["apply_patch · restart_service<br/>run_diagnostics"]
         end
 
-        %% Memory
-        Memory["📦 Memory Store<br/>Past incidents · System fingerprint"]
+        %% Persistence
+        Memory["📦 Persistence<br/>(Postgres / auto-SQLite)<br/>Incidents · Memory · Audit · Tokens"]
+
 
         %% Zero Trust
         subgraph ZeroTrust["🔒 Zero Trust Security"]
@@ -148,7 +149,8 @@ Incident memory store for pattern matching across past incidents, and the full M
 
 1. **Detection** — The **Log Watcher** polls monitored log files for error patterns and emits `LogEvent`s
 2. **Service Context** — The **Orchestrator Engine** injects the service source code path and log paths into agent prompts, so agents know WHERE to look. Agents then use `read_file` and `grep_search` tools to understand the service themselves.
-3. **Memory Enrichment** — The engine queries the **Memory Store** for similar past incidents
+3. **Memory Enrichment** — The engine queries the **Persistence** layer (Postgres in docker-compose, auto-synthesised SQLite otherwise) for similar past incidents
+
 4. **AI Pipeline** — The engine launches the **LangGraph State Machine** with the incident + service context:
    - **Triage** (low effort) → classifies severity, decides investigate or ignore
    - **Diagnosis** (high effort) → uses tools to read files, run diagnostics, find root cause
