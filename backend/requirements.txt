@@ -12,7 +12,7 @@ gitpython>=3.1.0
 # aiosqlite (dev + CI). Alembic for migrations. Greenlet is
 # required by SQLAlchemy async under the hood.
 sqlalchemy[asyncio]>=2.0.29,<3
-asyncpg>=0.29,<0.31
+asyncpg>=0.31.0,<0.32
 aiosqlite>=0.20,<1
 alembic>=1.13,<2
 greenlet>=3.0
