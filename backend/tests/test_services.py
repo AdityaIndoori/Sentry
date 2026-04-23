@@ -5,10 +5,9 @@ Tests for services.models.ServiceContext and services.registry.ServiceRegistry.
 import os
 import tempfile
 
-import pytest
 from backend.services.models import ServiceContext
 from backend.services.registry import ServiceRegistry
-from backend.shared.config import AppConfig, SecurityConfig, WatcherConfig, MemoryConfig
+from backend.shared.config import AppConfig, WatcherConfig
 
 
 class TestServiceContext:

@@ -13,12 +13,13 @@ Hardened:
 """
 
 import asyncio
+import contextlib
 import glob
 import logging
 import os
 import re
-from datetime import datetime, timezone
-from typing import AsyncIterator, Optional
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 
 from backend.shared.config import WatcherConfig
 from backend.shared.interfaces import ILogWatcher
@@ -44,11 +45,11 @@ class LogWatcher(ILogWatcher):
         # next read to avoid UnicodeDecodeError at chunk boundaries.
         self._file_state: dict[str, tuple[int, int, bytes]] = {}
         self._event_queue: asyncio.Queue[LogEvent] = asyncio.Queue(maxsize=100)
-        self._poll_task: Optional[asyncio.Task] = None
+        self._poll_task: asyncio.Task | None = None
 
     # ── lifecycle ────────────────────────────────────────────────────────
 
-    async def start(self) -> Optional[asyncio.Task]:
+    async def start(self) -> asyncio.Task | None:
         """Start the polling loop. Returns the task handle so the caller
         can cancel it cleanly on shutdown.
         """
@@ -68,10 +69,8 @@ class LogWatcher(ILogWatcher):
         self._poll_task = None
         if task and not task.done():
             task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
-            except (asyncio.CancelledError, Exception):
-                pass
         logger.info("Watcher stopped")
 
     async def events(self) -> AsyncIterator[LogEvent]:  # pragma: no cover
@@ -82,7 +81,7 @@ class LogWatcher(ILogWatcher):
                     self._event_queue.get(), timeout=1.0
                 )
                 yield event
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
 
     # ── polling ──────────────────────────────────────────────────────────
@@ -279,7 +278,7 @@ class LogWatcher(ILogWatcher):
                 event = LogEvent(
                     source_file=path,
                     line_content=sanitized_line,
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                     matched_pattern=pattern.pattern,
                     line_number=line_num,
                 )

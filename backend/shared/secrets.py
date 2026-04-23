@@ -40,7 +40,7 @@ import shutil
 import subprocess
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ class ISecretsProvider(ABC):
     """
 
     @abstractmethod
-    def get(self, name: str) -> Optional[str]:
+    def get(self, name: str) -> str | None:
         """Return the secret for logical name ``name`` or None if absent."""
 
     def require(self, name: str) -> str:
@@ -101,7 +101,7 @@ class EnvSecrets(ISecretsProvider):
     def __init__(self, prefix: str = "SECRET_"):
         self._prefix = prefix
 
-    def get(self, name: str) -> Optional[str]:
+    def get(self, name: str) -> str | None:
         upper = name.upper()
         val = os.environ.get(self._prefix + upper)
         if val is not None:
@@ -129,7 +129,7 @@ class FileSecrets(ISecretsProvider):
     def __init__(self, root: str = "/run/secrets"):
         self._root = Path(root)
 
-    def get(self, name: str) -> Optional[str]:
+    def get(self, name: str) -> str | None:
         path = self._root / name
         try:
             return path.read_text(encoding="utf-8").rstrip("\r\n")
@@ -174,10 +174,10 @@ class SopsSecrets(ISecretsProvider):
 
     def __init__(self, sops_file: str):
         self._file = sops_file
-        self._payload: Dict[str, Any] = self._decrypt(sops_file)
+        self._payload: dict[str, Any] = self._decrypt(sops_file)
 
     @staticmethod
-    def _decrypt(sops_file: str) -> Dict[str, Any]:
+    def _decrypt(sops_file: str) -> dict[str, Any]:
         if shutil.which("sops") is None:
             raise RuntimeError(
                 "SopsSecrets: `sops` CLI not found on PATH. "
@@ -197,7 +197,7 @@ class SopsSecrets(ISecretsProvider):
             ) from exc
         return _parse_structured(proc.stdout)
 
-    def get(self, name: str) -> Optional[str]:
+    def get(self, name: str) -> str | None:
         """Look up by dotted path; returns None on miss."""
         node: Any = self._payload
         for part in name.split("."):
@@ -214,7 +214,7 @@ class SopsSecrets(ISecretsProvider):
         return None
 
 
-def _parse_structured(text: str) -> Dict[str, Any]:
+def _parse_structured(text: str) -> dict[str, Any]:
     """Parse a YAML (preferred) or JSON payload into a dict.
 
     We try YAML first because sops commonly targets YAML; if PyYAML
@@ -223,9 +223,9 @@ def _parse_structured(text: str) -> Dict[str, Any]:
     """
     text = text.lstrip()
     try:
-        import yaml  # type: ignore
+        import yaml  # type: ignore[import-untyped]
     except Exception:  # pragma: no cover
-        yaml = None  # type: ignore
+        yaml = None
 
     if yaml is not None:
         try:
@@ -278,15 +278,15 @@ class VaultSecrets(ISecretsProvider):
         self,
         addr: str,
         *,
-        token: Optional[str] = None,
-        role_id: Optional[str] = None,
-        secret_id: Optional[str] = None,
+        token: str | None = None,
+        role_id: str | None = None,
+        secret_id: str | None = None,
         mount: str = "secret",
         base_path: str = "sentry",
         cache_ttl_seconds: int = 300,
     ):
         try:
-            import hvac  # type: ignore
+            import hvac
         except ImportError as exc:  # pragma: no cover
             raise RuntimeError(
                 "VaultSecrets requires the `hvac` package. Install it with "
@@ -297,7 +297,7 @@ class VaultSecrets(ISecretsProvider):
         self._mount = mount
         self._base = base_path.strip("/")
         self._cache_ttl = cache_ttl_seconds
-        self._cache: Dict[str, tuple[float, str]] = {}
+        self._cache: dict[str, tuple[float, str]] = {}
 
         if token:
             self._client.token = token
@@ -314,7 +314,7 @@ class VaultSecrets(ISecretsProvider):
                 f"VaultSecrets: client failed to authenticate to {addr}."
             )
 
-    def get(self, name: str) -> Optional[str]:
+    def get(self, name: str) -> str | None:
         import time
         now = time.time()
         cached = self._cache.get(name)
@@ -404,9 +404,9 @@ def build_secrets_provider(settings: Any) -> ISecretsProvider:
 
 
 __all__ = [
-    "ISecretsProvider",
     "EnvSecrets",
     "FileSecrets",
+    "ISecretsProvider",
     "SopsSecrets",
     "VaultSecrets",
     "build_secrets_provider",

@@ -2,13 +2,11 @@
 Tests for tools/patch_tool.py — Apply patch tool (audit + active mode).
 """
 
-import asyncio
 import os
-import shutil
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from backend.shared.security import SecurityGuard
-from backend.shared.config import SecurityConfig, SentryMode
+
 from backend.tools.patch_tool import ApplyPatchTool, _apply_unified_diff
 
 
@@ -119,7 +117,7 @@ class TestApplyPatchToolActiveMode:
     @pytest.mark.asyncio
     async def test_python_fallback_on_git_failure(self, tool, project_root):
         """When git fails, python fallback should be tried."""
-        with open(os.path.join(project_root, "config", "db.py"), "r") as f:
+        with open(os.path.join(project_root, "config", "db.py")) as f:
             content = f.read()
         lines = content.split("\n")
         first_line = lines[0]

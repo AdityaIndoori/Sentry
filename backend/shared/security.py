@@ -5,8 +5,6 @@ Handles path validation, command whitelisting, and mode enforcement.
 
 import logging
 import os
-import re
-from pathlib import Path
 from urllib.parse import urlparse
 
 from .config import SecurityConfig, SentryMode

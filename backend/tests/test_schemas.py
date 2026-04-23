@@ -5,10 +5,14 @@ and _try_extract_json() helper.
 """
 
 import json
-import pytest
+
 from backend.orchestrator.schemas import (
-    TriageResult, DiagnosisResult, RemediationResult,
-    VerificationResult, _clean_markdown, _try_extract_json,
+    DiagnosisResult,
+    RemediationResult,
+    TriageResult,
+    VerificationResult,
+    _clean_markdown,
+    _try_extract_json,
 )
 
 

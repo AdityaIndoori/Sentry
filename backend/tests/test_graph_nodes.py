@@ -6,23 +6,26 @@ _triage_node, _diagnosis_node, _remediation_node, _verification_node,
 and the routing functions _route_after_triage, _route_after_verification.
 """
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime, timezone
+from unittest.mock import AsyncMock
 
-from backend.shared.config import AppConfig, SecurityConfig, SentryMode, MemoryConfig, WatcherConfig
-from backend.shared.models import (
-    Incident, IncidentState, IncidentSeverity, MemoryEntry, ActivityType,
-)
-from backend.shared.circuit_breaker import CostCircuitBreaker
-from backend.shared.interfaces import ILLMClient, IMemoryStore, IToolExecutor
-from backend.shared.vault import LocalVault
+import pytest
+
+from backend.orchestrator.graph import IncidentGraphBuilder
+from backend.shared.agent_throttle import AgentThrottle
 from backend.shared.ai_gateway import AIGateway
 from backend.shared.audit_log import ImmutableAuditLog
-from backend.shared.agent_throttle import AgentThrottle
+from backend.shared.circuit_breaker import CostCircuitBreaker
+from backend.shared.config import AppConfig, MemoryConfig, SecurityConfig, SentryMode, WatcherConfig
+from backend.shared.interfaces import ILLMClient, IMemoryStore, IToolExecutor
+from backend.shared.models import (
+    ActivityType,
+    Incident,
+    IncidentSeverity,
+    IncidentState,
+    MemoryEntry,
+)
 from backend.shared.tool_registry import create_default_registry
-from backend.orchestrator.graph import IncidentGraphBuilder, IncidentGraphState
-
+from backend.shared.vault import LocalVault
 
 # ═══════════════════════════════════════════════════════════════
 # FIXTURES
@@ -161,7 +164,7 @@ class TestTriageNode:
         )
         builder = _make_builder(mock_llm, mock_tools, mock_memory, circuit_breaker, zero_trust_deps=zero_trust_deps)
         state = _make_state(service_context="=== SERVICE CONTEXT ===\nSource: /app\n===")
-        result = await builder._triage_node(state)
+        await builder._triage_node(state)
         # Service context should be passed to the LLM via the agent
         prompt = mock_llm.analyze.call_args[1].get("prompt") or mock_llm.analyze.call_args[0][0]
         assert "SERVICE CONTEXT" in prompt
@@ -280,7 +283,6 @@ class TestDiagnosisNode:
         mock_tools.execute.return_value = ToolResult(tool_name="read_file", success=True, output="content")
         # Override to return text on the summary call
         call_count = [0]
-        original_analyze = mock_llm.analyze.side_effect
 
         async def analyze_with_summary(*args, **kwargs):
             call_count[0] += 1

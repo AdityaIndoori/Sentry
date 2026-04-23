@@ -10,16 +10,15 @@ Production hardening:
 
 import asyncio
 import logging
-from typing import Optional
 
 from pydantic import ValidationError
 
+from backend.shared.audit_log import ImmutableAuditLog
 from backend.shared.circuit_breaker import RateLimiter
-from backend.shared.config import SecurityConfig, SentryMode
+from backend.shared.config import SentryMode
 from backend.shared.interfaces import IToolExecutor
 from backend.shared.models import ToolCall, ToolCategory, ToolResult
 from backend.shared.security import SecurityGuard
-from backend.shared.audit_log import ImmutableAuditLog
 from backend.shared.tool_registry import TrustedToolRegistry
 from backend.shared.vault import AgentRole, IVault, JITCredential
 
@@ -52,7 +51,7 @@ def _is_tool_transient(error_str: str) -> bool:
 
 class ToolExecutor(IToolExecutor):
     """Routes tool calls to implementations with security checks.
-    
+
     Defense-in-depth: If a TrustedToolRegistry is provided, the executor
     enforces role-based tool ACL at execution time. This is a safety net —
     even if an agent bypasses its own registry check, the executor blocks
@@ -60,9 +59,9 @@ class ToolExecutor(IToolExecutor):
     """
 
     def __init__(self, security: SecurityGuard, project_root: str,
-                 audit_log: Optional[ImmutableAuditLog] = None,
-                 registry: Optional[TrustedToolRegistry] = None,
-                 vault: Optional[IVault] = None):
+                 audit_log: ImmutableAuditLog | None = None,
+                 registry: TrustedToolRegistry | None = None,
+                 vault: IVault | None = None):
         self._security = security
         self._audit_log = audit_log
         self._registry = registry
@@ -89,7 +88,7 @@ class ToolExecutor(IToolExecutor):
             "restart_service": (self._restart, ToolCategory.ACTIVE),
         }
 
-    def _audit(self, action: str, detail: str, result: str = "", metadata: Optional[dict] = None):
+    def _audit(self, action: str, detail: str, result: str = "", metadata: dict | None = None):
         """Log to immutable audit trail if configured."""
         if self._audit_log:
             self._audit_log.log_action(
@@ -100,7 +99,7 @@ class ToolExecutor(IToolExecutor):
                 metadata=metadata,
             )
 
-    def _validate_tool_content(self, tool_name: str, args: dict) -> Optional[str]:
+    def _validate_tool_content(self, tool_name: str, args: dict) -> str | None:
         """P0.1b: Enforce tool-specific content rules BEFORE AUDIT short-circuit.
 
         Returns an error string if validation fails, or None if OK. These are
@@ -154,8 +153,8 @@ class ToolExecutor(IToolExecutor):
     async def execute(
         self,
         tool_call: ToolCall,
-        caller_role: Optional[AgentRole] = None,
-        credential: Optional[JITCredential] = None,
+        caller_role: AgentRole | None = None,
+        credential: JITCredential | None = None,
     ) -> ToolResult:
         # --- P1.4: Zero-Trust JIT credential enforcement ---
         #
@@ -425,7 +424,7 @@ class ToolExecutor(IToolExecutor):
                     error=error,
                     audit_only=audit_only,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 last_error = f"Tool {tool_call.tool_name} timed out after {TOOL_TIMEOUT_SECONDS}s"
                 logger.warning(f"{last_error} (attempt {attempt}/{TOOL_MAX_RETRIES})")
             except TypeError as e:

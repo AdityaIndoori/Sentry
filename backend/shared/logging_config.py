@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import sys
 from typing import Any
 
@@ -30,20 +29,20 @@ _CONFIGURED = False
 
 
 try:  # pragma: no cover — optional dep
-    import structlog  # type: ignore
+    import structlog
 
     _HAS_STRUCTLOG = True
 except ImportError:  # pragma: no cover
-    structlog = None  # type: ignore[assignment]
+    structlog = None
     _HAS_STRUCTLOG = False
 
 
 try:  # pragma: no cover — optional dep
-    from opentelemetry import trace as _otel_trace  # type: ignore
+    from opentelemetry import trace as _otel_trace
 
     _HAS_OTEL = True
 except ImportError:  # pragma: no cover
-    _otel_trace = None  # type: ignore[assignment]
+    _otel_trace = None
     _HAS_OTEL = False
 
 
@@ -61,7 +60,7 @@ def _current_trace_ids() -> tuple[str, str]:  # pragma: no cover
         return "", ""
 
 
-def _add_trace_ids(_logger: Any, _method_name: str, event_dict: dict) -> dict:  # pragma: no cover
+def _add_trace_ids(_logger: Any, _method_name: str, event_dict: dict[str, Any]) -> dict[str, Any]:  # pragma: no cover
     tid, sid = _current_trace_ids()
     if tid:
         event_dict["trace_id"] = tid

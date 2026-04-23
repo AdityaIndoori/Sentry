@@ -12,23 +12,23 @@ Each agent:
 """
 
 import logging
-from abc import ABC, abstractmethod
-from typing import Any, Optional
+from abc import ABC
+from typing import Any
 
-from backend.shared.vault import AgentRole, LocalVault, NonHumanIdentity, IVault
 from backend.shared.ai_gateway import AIGateway
 from backend.shared.audit_log import ImmutableAuditLog
 from backend.shared.metrics import inc_llm_call, inc_tool_call, observe_llm_cost
-from backend.shared.observability import get_telemetry
 from backend.shared.models import ToolCall, ToolResult
+from backend.shared.observability import get_telemetry
 from backend.shared.security import SecurityGuard
+from backend.shared.vault import AgentRole, IVault, NonHumanIdentity
 
 logger = logging.getLogger(__name__)
 
 
 class BaseAgent(ABC):
     """Abstract base class for all Sentry agents.
-    
+
     LLM and tool executor are stored with name-mangling (__llm, __tools)
     so subclasses cannot access them directly. The only way to call the LLM
     or execute a tool is through _call_llm() and _call_tool(), which
@@ -41,8 +41,8 @@ class BaseAgent(ABC):
         vault: IVault,
         role: AgentRole,
         gateway: AIGateway,
-        audit_log: Optional[ImmutableAuditLog] = None,
-        security: Optional[SecurityGuard] = None,
+        audit_log: ImmutableAuditLog | None = None,
+        security: SecurityGuard | None = None,
         llm: Any = None,
         tools: Any = None,
     ):
@@ -74,7 +74,7 @@ class BaseAgent(ABC):
     # ── Activity logging (returned to graph node) ─────────
 
     def _log_activity(self, activity_type: str, message: str, detail: str = "",
-                      metadata: Optional[dict] = None):
+                      metadata: dict | None = None):
         """Record an activity entry. Graph node applies these to the incident after run()."""
         self._activities.append({
             "activity_type": activity_type,
@@ -86,7 +86,7 @@ class BaseAgent(ABC):
 
     # ── LLM access (the ONLY way to call the LLM) ────────
 
-    async def _call_llm(self, prompt: str, effort: str, tools: list = None) -> dict:
+    async def _call_llm(self, prompt: str, effort: str, tools: list | None = None) -> dict:
         """Call the LLM. Automatically logs LLM_CALL and INFO activities.
 
         This is the ONLY way to access the LLM from any agent.
@@ -282,7 +282,7 @@ class BaseAgent(ABC):
 
     # ── Audit trail (security events) ─────────────────────
 
-    def _audit(self, action: str, detail: str, result: str = "", metadata: Optional[dict] = None):
+    def _audit(self, action: str, detail: str, result: str = "", metadata: dict | None = None):
         """Log an action to the immutable audit trail (if configured)."""
         if self._audit_log:
             self._audit_log.log_action(

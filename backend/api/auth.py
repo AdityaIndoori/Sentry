@@ -28,11 +28,12 @@ registry via :func:`TokenRegistry.add`.
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import Iterable, Optional
+from typing import Any
 
-from fastapi import HTTPException, Request, status
+from fastapi import HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -102,13 +103,14 @@ class TokenRegistry:
         with self._lock:
             return key in self._revoked
 
-    def resolve(self, raw_token: str) -> Optional[Principal]:
+    def resolve(self, raw_token: str) -> Principal | None:
         """Return the Principal for ``raw_token``, or None on miss/revoked."""
         key = hash_token(raw_token)
         with self._lock:
             if key in self._revoked:
                 return None
-            return self._tokens.get(key)
+            principal: Principal | None = self._tokens.get(key)
+            return principal
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +118,7 @@ class TokenRegistry:
 # ---------------------------------------------------------------------------
 
 
-def seed_tokens_from_settings(settings, registry: TokenRegistry) -> None:
+def seed_tokens_from_settings(settings: Any, registry: TokenRegistry) -> None:
     """Convert the legacy ``API_AUTH_TOKEN`` env knob into a default admin.
 
     P2.1 keeps things simple: if the operator configured
@@ -138,7 +140,7 @@ def seed_tokens_from_settings(settings, registry: TokenRegistry) -> None:
     logger.info("Auth: seeded admin token from API_AUTH_TOKEN (id=%s)", principal.id)
 
 
-async def hydrate_registry_from_repo(registry: "TokenRegistry", token_repo) -> int:  # noqa: F821 - fwd ref
+async def hydrate_registry_from_repo(registry: TokenRegistry, token_repo: Any) -> int:
     """P4.2: rebuild the in-memory registry from persisted ``api_tokens`` rows.
 
     The in-memory :class:`TokenRegistry` is keyed by the raw token (so
@@ -163,15 +165,15 @@ async def hydrate_registry_from_repo(registry: "TokenRegistry", token_repo) -> i
             role=stored.role,
             scopes=frozenset(stored.scopes),
         )
-        with registry._lock:  # type: ignore[attr-defined]
+        with registry._lock:
             if stored.is_revoked:
                 # Record the hash as revoked WITHOUT adding it back to the
                 # active map. If the raw token ever shows up on the wire,
                 # _get_registry(request).is_revoked() will still see it.
-                registry._revoked.add(stored.token_hash)  # type: ignore[attr-defined]
+                registry._revoked.add(stored.token_hash)
             else:
-                registry._tokens[stored.token_hash] = principal  # type: ignore[attr-defined]
-                registry._revoked.discard(stored.token_hash)  # type: ignore[attr-defined]
+                registry._tokens[stored.token_hash] = principal
+                registry._revoked.discard(stored.token_hash)
                 active += 1
     logger.info(
         "Auth: hydrated %d active principals from token repo (%d total stored)",
@@ -195,7 +197,7 @@ _OPEN_PATHS: frozenset[str] = frozenset({
 })
 
 
-def _extract_bearer(request: Request) -> tuple[Optional[str], Optional[str]]:
+def _extract_bearer(request: Request) -> tuple[str | None, str | None]:
     """Parse the ``Authorization`` header.
 
     Returns
@@ -252,7 +254,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
     a token — keeps passing.
     """
 
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
         # Always allow liveness + docs endpoints.
         if request.url.path in _OPEN_PATHS:
             return await call_next(request)
@@ -295,7 +301,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-def _get_registry(request: Request) -> Optional[TokenRegistry]:
+def _get_registry(request: Request) -> TokenRegistry | None:
     """Pull the TokenRegistry off the app container, if attached."""
     try:
         container = request.app.state.container
@@ -313,7 +319,7 @@ def _json_error(status_code: int, detail: str) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 
-def require_scope(*scopes: str):
+def require_scope(*scopes: str) -> Callable[[Request], Awaitable[Principal | None]]:
     """Return a FastAPI dependency that enforces all ``scopes``.
 
     * 401 when auth is enabled but no principal resolved.
@@ -322,11 +328,11 @@ def require_scope(*scopes: str):
       so dev mode keeps working without ceremony.
     """
 
-    async def _enforce(request: Request) -> Optional[Principal]:
+    async def _enforce(request: Request) -> Principal | None:
         registry = _get_registry(request)
         auth_required = registry is not None and not registry.is_empty()
 
-        principal = getattr(request.state, "principal", None)
+        principal: Principal | None = getattr(request.state, "principal", None)
 
         if principal is None:
             if not auth_required:
@@ -348,9 +354,9 @@ def require_scope(*scopes: str):
 
 
 __all__ = [
-    "TokenRegistry",
     "AuthMiddleware",
+    "TokenRegistry",
+    "hydrate_registry_from_repo",
     "require_scope",
     "seed_tokens_from_settings",
-    "hydrate_registry_from_repo",
 ]

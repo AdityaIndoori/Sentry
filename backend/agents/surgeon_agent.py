@@ -14,12 +14,12 @@ import re
 from typing import Any
 
 from backend.agents.base_agent import BaseAgent
-from backend.shared.vault import AgentRole, IVault
-from backend.shared.ai_gateway import AIGateway
 from backend.shared.agent_throttle import AgentThrottle
-from backend.shared.tool_registry import TrustedToolRegistry
+from backend.shared.ai_gateway import AIGateway
 from backend.shared.models import Incident
 from backend.shared.prompts import REMEDIATION_SYSTEM_PROMPT as SURGEON_SYSTEM_PROMPT
+from backend.shared.tool_registry import TrustedToolRegistry
+from backend.shared.vault import AgentRole, IVault
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class SurgeonAgent(BaseAgent):
         self._throttle = throttle
         self._config = config
 
-    async def run(self, incident: Incident, tool_results_context: list = None) -> dict:
+    async def run(self, incident: Incident, tool_results_context: list | None = None) -> dict:
         """
         Propose and optionally apply a fix.
         Returns: {"fix_description": str, "fix_applied": bool, "tool_results": list,
@@ -81,7 +81,7 @@ class SurgeonAgent(BaseAgent):
             full_prompt = f"{SURGEON_SYSTEM_PROMPT}\n\nApply a fix for this incident:\n\n{context}"
             tool_defs = self._get_tool_definitions(category="remediation")
 
-            for rem_loop in range(max_remediation_loops):
+            for _rem_loop in range(max_remediation_loops):
                 response = await self._call_llm(
                     prompt=full_prompt, effort="medium", tools=tool_defs,
                 )

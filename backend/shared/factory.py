@@ -21,7 +21,7 @@ The factory is intentionally permissive about what it's given:
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from backend.shared.container import ServiceContainer
 from backend.shared.settings import Settings, get_settings
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 def build_container(
-    settings: Optional[Settings] = None,
+    settings: Settings | None = None,
     *,
     llm_override: Any = None,
 ) -> ServiceContainer:
@@ -48,13 +48,13 @@ def build_container(
     # Imports are local so that ``import backend.shared.factory`` is
     # cheap and doesn't eagerly pull in the Anthropic SDK etc.
     from backend.api.auth import TokenRegistry, seed_tokens_from_settings
-    from backend.shared.secrets import build_secrets_provider
     from backend.orchestrator.engine import Orchestrator
     from backend.orchestrator.llm_client import create_llm_client
     from backend.shared.agent_throttle import AgentThrottle
     from backend.shared.ai_gateway import AIGateway
     from backend.shared.audit_log import ImmutableAuditLog
     from backend.shared.circuit_breaker import CostCircuitBreaker
+    from backend.shared.secrets import build_secrets_provider
     from backend.shared.security import SecurityGuard
     from backend.shared.tool_registry import create_default_registry
     from backend.shared.vault import LocalVault

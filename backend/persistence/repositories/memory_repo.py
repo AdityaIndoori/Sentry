@@ -12,9 +12,9 @@ working unchanged.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from sqlalchemy import delete, insert, select
+from sqlalchemy import delete, select
 
 from backend.persistence.models import MemoryEntryRow, MemoryStateRow
 from backend.persistence.session import Database
@@ -46,7 +46,7 @@ class PostgresMemoryRepo(IMemoryStore):
         return [self._row_to_entry(r) for r in rows]
 
     async def save(self, entry: MemoryEntry) -> None:
-        timestamp = entry.timestamp or datetime.now(timezone.utc).isoformat()
+        timestamp = entry.timestamp or datetime.now(UTC).isoformat()
         row = MemoryEntryRow(
             id=entry.id,
             symptom=entry.symptom,
@@ -105,7 +105,7 @@ class PostgresMemoryRepo(IMemoryStore):
                         fix=e.fix,
                         vectors=list(e.vectors or []),
                         timestamp=e.timestamp
-                        or datetime.now(timezone.utc).isoformat(),
+                        or datetime.now(UTC).isoformat(),
                     )
                 )
             await session.commit()

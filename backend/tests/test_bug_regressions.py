@@ -18,19 +18,20 @@ Bug fix index:
 
 import os
 import tempfile
-
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
+from backend.shared.agent_throttle import AgentThrottle
+from backend.shared.ai_gateway import AIGateway
 from backend.shared.interfaces import ILLMClient, IToolExecutor
 from backend.shared.models import (
-    Incident, IncidentState, IncidentSeverity, ToolCall, ToolResult,
+    Incident,
+    IncidentState,
+    ToolCall,
 )
-from backend.shared.vault import LocalVault, AgentRole
-from backend.shared.ai_gateway import AIGateway
-from backend.shared.agent_throttle import AgentThrottle
 from backend.shared.tool_registry import TrustedToolRegistry
-
+from backend.shared.vault import AgentRole, LocalVault
 
 # ═══════════════════════════════════════════════════════════════
 # BUG FIX #1 — All agents must call llm.analyze(prompt=, effort=)
@@ -126,6 +127,7 @@ class TestBugFix9_RateLimiterAutoRecord:
 
     def test_is_allowed_allows_after_cooldown(self):
         import time
+
         from backend.shared.circuit_breaker import RateLimiter
         rl = RateLimiter()
         assert rl.is_allowed("key", cooldown_seconds=0) is True

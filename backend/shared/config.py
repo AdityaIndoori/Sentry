@@ -5,9 +5,9 @@ Uses environment variables with secure defaults following 12-factor app principl
 
 import os
 from dataclasses import dataclass, field
-from dotenv import load_dotenv
 from enum import Enum
-from typing import FrozenSet
+
+from dotenv import load_dotenv
 
 
 class SentryMode(Enum):
@@ -32,14 +32,14 @@ class SecurityConfig:
     max_cost_per_10min_usd: float = 5.00
     max_retries: int = 3
     restart_cooldown_seconds: int = 600  # 10 minutes
-    allowed_diagnostic_commands: FrozenSet[str] = field(default_factory=lambda: frozenset({
+    allowed_diagnostic_commands: frozenset[str] = field(default_factory=lambda: frozenset({
         "ps aux", "netstat -tlnp", "curl", "tail", "df -h",
         "free -m", "uptime", "systemctl status",
         "docker ps", "docker inspect", "docker logs",
         "ping", "dig", "cat /proc/meminfo", "lsof -i",
         "find", "ls",
     }))
-    allowed_fetch_domains: FrozenSet[str] = field(default_factory=lambda: frozenset({
+    allowed_fetch_domains: frozenset[str] = field(default_factory=lambda: frozenset({
         "docs.python.org", "stackoverflow.com", "linux.die.net",
         "man7.org", "nginx.org", "postgresql.org",
     }))

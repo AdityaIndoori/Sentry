@@ -11,7 +11,7 @@ import asyncio
 
 import pytest
 
-from backend.api.broadcaster import IncidentBroadcaster, DEFAULT_QUEUE_SIZE
+from backend.api.broadcaster import DEFAULT_QUEUE_SIZE, IncidentBroadcaster
 
 
 @pytest.mark.asyncio
@@ -70,7 +70,7 @@ async def test_full_queue_drops_new_event_for_that_subscriber():
 @pytest.mark.asyncio
 async def test_slow_subscriber_does_not_block_fast_subscriber():
     b = IncidentBroadcaster(queue_size=2)
-    async with b.subscribe() as slow, b.subscribe() as fast:
+    async with b.subscribe(), b.subscribe() as fast:
         # Fill slow's queue.
         b.publish_nowait({"n": 1})
         b.publish_nowait({"n": 2})

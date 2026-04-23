@@ -5,17 +5,19 @@ Tests: Individual agents, Supervisor routing, Agent isolation,
 BaseAgent credential/gateway flows, Detective/Surgeon/Triage/Validator full paths.
 """
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-from backend.shared.vault import AgentRole, LocalVault
-from backend.shared.tool_registry import TrustedToolRegistry
+import pytest
+
 from backend.shared.agent_throttle import AgentThrottle
 from backend.shared.ai_gateway import AIGateway
 from backend.shared.models import (
-    Incident, IncidentState, IncidentSeverity, ToolCall, ToolResult,
+    Incident,
+    IncidentState,
+    ToolResult,
 )
-
+from backend.shared.tool_registry import TrustedToolRegistry
+from backend.shared.vault import AgentRole, LocalVault
 
 # ═══════════════════════════════════════════════════════════════
 # FIXTURES
@@ -124,8 +126,8 @@ class TestAgentIdentity:
         assert agent.nhi.role == AgentRole.VALIDATOR
 
     def test_no_two_agents_share_identity(self, vault):
-        from backend.agents.triage_agent import TriageAgent
         from backend.agents.detective_agent import DetectiveAgent
+        from backend.agents.triage_agent import TriageAgent
         a1 = TriageAgent(vault=vault, llm=AsyncMock(), gateway=AIGateway())
         a2 = DetectiveAgent(
             vault=vault, llm=AsyncMock(), tools=AsyncMock(),
@@ -527,7 +529,7 @@ class TestSurgeonAgent:
             config=config,
         )
         incident = Incident(id="INC-BLK2", symptom="err", root_cause="rc")
-        result = await agent.run(incident)
+        await agent.run(incident)
         tools.execute.assert_not_awaited()
 
     async def test_surgeon_tool_exception(self, vault, tool_registry, throttle):
@@ -575,7 +577,7 @@ class TestSurgeonAgent:
             config=config,
         )
         incident = Incident(id="INC-THR2", symptom="err", root_cause="rc")
-        result = await agent.run(incident)
+        await agent.run(incident)
         tools.execute.assert_not_awaited()
 
     def test_surgeon_parse_response(self, vault, tool_registry, throttle):

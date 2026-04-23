@@ -3,13 +3,13 @@ Tests for shared/config.py — configuration loading and defaults.
 """
 
 import os
-import pytest
 from unittest.mock import patch
 
 from backend.shared.config import (
-    SentryMode, EffortLevel, LLMProvider,
-    SecurityConfig, AnthropicConfig, BedrockGatewayConfig,
-    WatcherConfig, MemoryConfig, AppConfig,
+    AppConfig,
+    LLMProvider,
+    SecurityConfig,
+    SentryMode,
     load_config,
 )
 

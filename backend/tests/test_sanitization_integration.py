@@ -7,18 +7,15 @@ Tests written FIRST before implementation:
 """
 
 import os
-import tempfile
+from unittest.mock import AsyncMock, patch
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
-from backend.shared.security import SecurityGuard
-from backend.shared.config import SecurityConfig, SentryMode
-from backend.shared.vault import LocalVault, AgentRole
 from backend.shared.ai_gateway import AIGateway
-from backend.shared.models import Incident, ToolCall, ToolResult, LogEvent
-from datetime import datetime, timezone
-
+from backend.shared.config import SecurityConfig, SentryMode
+from backend.shared.models import ToolCall
+from backend.shared.security import SecurityGuard
+from backend.shared.vault import LocalVault
 
 # ═══════════════════════════════════════════════════════════════
 # FIXTURES
@@ -104,8 +101,9 @@ class TestAPITriggerSanitization:
     @pytest.mark.asyncio
     async def test_trigger_endpoint_sanitizes_message(self):
         """Manual trigger MUST sanitize the message field."""
+        from httpx import ASGITransport, AsyncClient
+
         from backend.api.app import app
-        from httpx import AsyncClient, ASGITransport
 
         # We test by checking that the orchestrator receives sanitized input
         with patch("backend.api.app._orchestrator") as mock_orch, \
@@ -115,7 +113,7 @@ class TestAPITriggerSanitization:
 
             transport = ASGITransport(app=app)
             async with AsyncClient(transport=transport, base_url="http://test") as client:
-                resp = await client.post("/api/trigger", json={
+                await client.post("/api/trigger", json={
                     "message": "Error; rm -rf / && bad_command",
                     "source": "test",
                 })
@@ -202,8 +200,8 @@ class TestRestartToolSanitization:
     @pytest.mark.asyncio
     async def test_restart_uses_env_not_user_input(self):
         """restart_service takes no user input — command comes from env."""
-        from backend.tools.restart_tool import RestartServiceTool
         from backend.shared.circuit_breaker import RateLimiter
+        from backend.tools.restart_tool import RestartServiceTool
         config = SecurityConfig(mode=SentryMode.AUDIT)
         guard = SecurityGuard(config)
         tool = RestartServiceTool(guard, RateLimiter(), 600)
@@ -224,8 +222,8 @@ class TestWatcherSanitization:
     @pytest.mark.asyncio
     async def test_watcher_sanitizes_log_lines(self, tmp_path):
         """Log lines MUST be sanitized before emitting as LogEvent."""
-        from backend.watcher.log_watcher import LogWatcher
         from backend.shared.config import WatcherConfig
+        from backend.watcher.log_watcher import LogWatcher
 
         log_file = os.path.join(str(tmp_path), "test.log")
         with open(log_file, "w") as f:

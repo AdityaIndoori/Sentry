@@ -23,7 +23,6 @@ import importlib
 
 import pytest
 
-
 metrics = pytest.importorskip("backend.shared.metrics")  # always importable
 
 

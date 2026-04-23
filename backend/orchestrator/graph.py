@@ -6,29 +6,28 @@ Uses LangGraph's StateGraph for ordered, deterministic state transitions:
   TRIAGE -> DIAGNOSIS -> REMEDIATION -> VERIFICATION -> RESOLVED/ESCALATED
 """
 
-import asyncio
 import logging
 import os
-from dataclasses import dataclass, field
-from typing import Any, Literal, TypedDict
+from datetime import UTC
+from typing import Literal, TypedDict
 
 from langgraph.graph import END, StateGraph
 
-from backend.shared.circuit_breaker import CostCircuitBreaker
-from backend.shared.config import AppConfig, SentryMode
-from backend.shared.interfaces import ILLMClient, IMemoryStore, IToolExecutor
-from backend.shared.models import (
-    ActivityType, Incident, IncidentSeverity, IncidentState, ToolCall,
-)
-from backend.orchestrator.schemas import (
-    DiagnosisResult, RemediationResult, TriageResult, VerificationResult,
-)
+from backend.agents.detective_agent import DetectiveAgent
+from backend.agents.surgeon_agent import SurgeonAgent
 
 # Agent imports for Zero Trust delegation
 from backend.agents.triage_agent import TriageAgent
-from backend.agents.detective_agent import DetectiveAgent
-from backend.agents.surgeon_agent import SurgeonAgent
 from backend.agents.validator_agent import ValidatorAgent
+from backend.shared.circuit_breaker import CostCircuitBreaker
+from backend.shared.config import AppConfig
+from backend.shared.interfaces import ILLMClient, IMemoryStore, IToolExecutor
+from backend.shared.models import (
+    ActivityType,
+    Incident,
+    IncidentSeverity,
+    IncidentState,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +120,7 @@ class IncidentGraphBuilder:
 
     async def _triage_node(self, state: IncidentGraphState) -> IncidentGraphState:
         """Phase 1: Quick severity assessment (low effort).
-        
+
         When Zero Trust deps are available, delegates to TriageAgent which provides:
         - NHI identity + JIT credentials
         - AI Gateway prompt injection scanning
@@ -202,7 +201,7 @@ class IncidentGraphBuilder:
 
     async def _diagnosis_node(self, state: IncidentGraphState) -> IncidentGraphState:
         """Phase 2: Deep analysis with tool loop (high effort).
-        
+
         Delegates to DetectiveAgent which provides:
         - NHI identity + JIT credentials
         - Tool registry role-based ACL (read-only tools only)
@@ -271,7 +270,7 @@ class IncidentGraphBuilder:
 
     async def _remediation_node(self, state: IncidentGraphState) -> IncidentGraphState:
         """Phase 3: Apply or propose fix (medium effort).
-        
+
         Delegates to SurgeonAgent which provides:
         - NHI identity + JIT credentials
         - Tool registry role-based ACL (active tools: apply_patch, restart_service)
@@ -336,7 +335,7 @@ class IncidentGraphBuilder:
 
     async def _verification_node(self, state: IncidentGraphState) -> IncidentGraphState:
         """Phase 4: Verify the fix (disabled thinking for determinism).
-        
+
         Delegates to ValidatorAgent which provides:
         - NHI identity + JIT credentials
         - AI Gateway scanning + audit trail
@@ -345,7 +344,7 @@ class IncidentGraphBuilder:
         incident.state = IncidentState.VERIFICATION
         incident.current_agent_action = "Verifying fix..."
         incident.log_activity(ActivityType.PHASE_START, "verification", "Verification phase started",
-                              detail=f"Checking if fix resolved the issue")
+                              detail="Checking if fix resolved the issue")
 
         try:
             # ── Delegate to ValidatorAgent (Zero Trust secured) ──
@@ -363,8 +362,8 @@ class IncidentGraphBuilder:
 
             if resolved:
                 incident.state = IncidentState.RESOLVED
-                from datetime import datetime, timezone
-                incident.resolved_at = datetime.now(timezone.utc)
+                from datetime import datetime
+                incident.resolved_at = datetime.now(UTC)
                 incident.log_activity(ActivityType.DECISION, "verification",
                                       "✅ Incident RESOLVED",
                                       detail=reason)
@@ -422,7 +421,7 @@ class IncidentGraphBuilder:
 
     def _apply_agent_activities(self, incident: Incident, result: dict, phase: str):
         """Apply activity entries returned by an agent to the incident.
-        
+
         Agents collect activities via BaseAgent._log_activity() during run().
         This method transfers them to the incident's activity log so the
         dashboard can display LLM_CALL, TOOL_CALL, TOOL_RESULT entries.
@@ -452,7 +451,7 @@ class IncidentGraphBuilder:
         Returns the short commit hash, or None if the repo is not a git repo.
         Only commits if .git already exists — does NOT initialize new repos.
         """
-        from git import Repo, InvalidGitRepositoryError, Actor
+        from git import Actor, InvalidGitRepositoryError, Repo
         project_root = self._config.security.project_root
 
         try:

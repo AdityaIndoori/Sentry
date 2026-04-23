@@ -33,8 +33,7 @@ import hashlib
 import json
 import logging
 import threading
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 
@@ -58,7 +57,7 @@ class PostgresAuditLog:
         # _last_hash is cached in memory to avoid a round-trip per log
         # call. It is initialized lazily from the DB on first
         # log_action()/verify_integrity().
-        self._last_hash: Optional[str] = None
+        self._last_hash: str | None = None
 
     # ------------------------------------------------------------------
     # Sync entrypoints (matches ImmutableAuditLog)
@@ -71,14 +70,14 @@ class PostgresAuditLog:
         detail: str,
         result: str,
         chain_of_thought: str = "",
-        metadata: Optional[dict] = None,
+        metadata: dict | None = None,
     ) -> str:
         """Append one immutable entry. Returns the new entry_hash."""
         with self._lock:
             prev = self._last_hash if self._last_hash is not None else self._sync_get_last_hash()
 
             entry = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "agent_id": agent_id,
                 "action": action,
                 "detail": detail,

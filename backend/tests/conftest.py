@@ -5,20 +5,22 @@ Shared test fixtures for Sentry test suite.
 import os
 import sys
 import tempfile
+from unittest.mock import AsyncMock
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
 
 # Ensure backend is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from backend.shared.circuit_breaker import CostCircuitBreaker, RateLimiter
 from backend.shared.config import (
-    AppConfig, AnthropicConfig, MemoryConfig,
-    SecurityConfig, SentryMode, WatcherConfig,
+    AppConfig,
+    MemoryConfig,
+    SecurityConfig,
+    SentryMode,
 )
 from backend.shared.interfaces import ILLMClient, IMemoryStore, IToolExecutor
 from backend.shared.security import SecurityGuard
-from backend.shared.circuit_breaker import CostCircuitBreaker, RateLimiter
 
 
 @pytest.fixture
@@ -99,7 +101,7 @@ def app_config(security_config, memory_config):
 @pytest.fixture
 def spec_mock_llm():
     """LLM mock that enforces ILLMClient contract via spec=.
-    
+
     Using spec= means calling analyze() with wrong kwargs
     (e.g. system_prompt=, user_message=) will raise TypeError.
     """

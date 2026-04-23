@@ -12,13 +12,11 @@ its SHA-256 hash.
 from __future__ import annotations
 
 import asyncio
-from io import StringIO
-from unittest.mock import patch
 
 import pytest
 
 from backend.api.auth import TokenRegistry, hydrate_registry_from_repo
-from backend.persistence.repositories.token_repo import StoredToken, TokenRepository
+from backend.persistence.repositories.token_repo import TokenRepository
 from backend.persistence.session import build_database
 from backend.shared.principal import generate_token, hash_token
 
@@ -206,11 +204,12 @@ class TestCreateAdminTokenCLI:
     """Integration test: the CLI hits a real SQLite DB and prints a raw token."""
 
     def test_cli_creates_token_and_prints_it(self, tmp_path, monkeypatch, capsys):
+        import dataclasses
+
         from backend.scripts import create_admin_token as cli
 
         # Force the CLI to use our tmp sqlite file by mocking get_settings.
         from backend.shared.settings import Settings
-        import dataclasses
 
         db_url = f"sqlite+aiosqlite:///{tmp_path / 'cli.db'}"
         fake_settings = dataclasses.replace(
@@ -258,10 +257,11 @@ class TestCreateAdminTokenCLI:
 
 class TestRevokeTokenCLI:
     def test_cli_revokes_existing_token(self, tmp_path, monkeypatch, capsys):
+        import dataclasses
+
         from backend.scripts import create_admin_token as create_cli
         from backend.scripts import revoke_token as revoke_cli
         from backend.shared.settings import Settings
-        import dataclasses
 
         db_url = f"sqlite+aiosqlite:///{tmp_path / 'cli.db'}"
         fake = dataclasses.replace(
@@ -286,11 +286,12 @@ class TestRevokeTokenCLI:
 
 class TestListTokensCLI:
     def test_cli_lists_active_only(self, tmp_path, monkeypatch, capsys):
+        import dataclasses
+
         from backend.scripts import create_admin_token as create_cli
         from backend.scripts import list_tokens as list_cli
         from backend.scripts import revoke_token as revoke_cli
         from backend.shared.settings import Settings
-        import dataclasses
 
         db_url = f"sqlite+aiosqlite:///{tmp_path / 'cli.db'}"
         fake = dataclasses.replace(
@@ -303,7 +304,7 @@ class TestListTokensCLI:
 
         # Create two tokens, revoke one.
         create_cli.main(["--name", "alive", "--scopes", "*"])
-        raw_alive = capsys.readouterr().out.strip()
+        capsys.readouterr().out.strip()
         create_cli.main(["--name", "dead", "--scopes", "incidents:read"])
         raw_dead = capsys.readouterr().out.strip()
         revoke_cli.main([hash_token(raw_dead)[:12]])

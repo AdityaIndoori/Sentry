@@ -12,7 +12,6 @@ Zero Trust principle: Trust nothing, scan everything.
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import List
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +20,7 @@ logger = logging.getLogger(__name__)
 class ScanResult:
     """Result of a gateway scan."""
     is_safe: bool
-    threats: List[str] = field(default_factory=list)
+    threats: list[str] = field(default_factory=list)
     details: str = ""
 
 

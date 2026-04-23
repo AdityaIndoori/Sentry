@@ -24,7 +24,7 @@ Immutability of ``audit_log`` is enforced two ways:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import JSON, DateTime, Index, Integer, String, Text
@@ -32,7 +32,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class Base(DeclarativeBase):
@@ -172,10 +172,10 @@ class ApiTokenRow(Base):
 
 
 __all__ = [
+    "ApiTokenRow",
+    "AuditLogRow",
     "Base",
     "IncidentRow",
     "MemoryEntryRow",
     "MemoryStateRow",
-    "AuditLogRow",
-    "ApiTokenRow",
 ]

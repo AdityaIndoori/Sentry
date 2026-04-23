@@ -10,13 +10,13 @@ Tools: NONE (triage is analysis-only, no tool access)
 """
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from backend.agents.base_agent import BaseAgent
-from backend.shared.vault import AgentRole, IVault
 from backend.shared.ai_gateway import AIGateway
 from backend.shared.models import Incident
 from backend.shared.prompts import TRIAGE_SYSTEM_PROMPT
+from backend.shared.vault import AgentRole, IVault
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ class TriageAgent(BaseAgent):
         super().__init__(vault, AgentRole.TRIAGE, gateway, audit_log=audit_log, llm=llm)
 
     async def run(
-        self, incident: Incident, memory_hints: list[dict] = None,
+        self, incident: Incident, memory_hints: list[dict] | None = None,
         service_context: str = "",
     ) -> dict:
         """

@@ -6,13 +6,15 @@ Implements: read_file, grep_search, fetch_docs
 import logging
 import os
 import re
-from typing import Optional
 
 import aiohttp
 
 from backend.shared.security import SecurityGuard
 from backend.tools.tool_schemas import (
-    ReadFileArgs, GrepSearchArgs, FetchDocsArgs, pydantic_to_input_schema,
+    FetchDocsArgs,
+    GrepSearchArgs,
+    ReadFileArgs,
+    pydantic_to_input_schema,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,7 +45,7 @@ class ReadFileTool:
             }
 
         try:
-            with open(full_path, "r", encoding="utf-8", errors="replace") as f:
+            with open(full_path, encoding="utf-8", errors="replace") as f:
                 content = f.read()
             return {"success": True, "output": content}
         except Exception as e:
@@ -91,7 +93,7 @@ class GrepSearchTool:
                         break
                     fpath = os.path.join(root, fname)
                     try:
-                        with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                        with open(fpath, encoding="utf-8", errors="replace") as f:
                             for i, line in enumerate(f, 1):
                                 if pattern.search(line):
                                     rel = os.path.relpath(fpath, self._project_root)

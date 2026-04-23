@@ -199,7 +199,7 @@ feature in P1–P3 adds rows here.
 
 ---
 
-## Test Scoreboard (as of P4.1 + P4.2 + P4.3 + P4.4)
+## Test Scoreboard (as of P4.1 + P4.2 + P4.3 + P4.4 + P4.5)
 
 Last full run command:
 
@@ -225,6 +225,40 @@ Combined unit + E2E: **706 passed / 9 skipped / 1 xfailed / 0 failed**.
 | **P4.2 (Postgres API tokens + CLIs)** | **704 passed / 9 skipped / 1 xfailed / 0 failed** (+15) |
 | P4.3 (vitest coverage expansion) | 704 passed / 9 skipped / 1 xfailed / 0 failed (frontend only — 12 new JS tests) |
 | **P4.4 (OpenAPI snapshot)** | **706 passed / 9 skipped / 1 xfailed / 0 failed** (+2) |
+| **P4.5 (mypy strict-island expansion + ruff fail-on-error)** | **706 passed / 9 skipped / 1 xfailed / 0 failed** (no new tests — pure lint/type tightening) |
+
+### P4.5 delta (mypy + ruff enforcement)
+
+* **Strict-islands expanded** (8 → 11 modules). Added
+  ``backend.shared.settings``,
+  ``backend.persistence.session``, and
+  ``backend.persistence.repositories.token_repo`` after flushing out
+  the silent annotation gaps in each: unused ``# type: ignore``
+  comments on optional-dep imports (``prometheus_client``,
+  ``structlog``, ``opentelemetry``, ``yaml``, ``hvac``),
+  ``Missing type arguments for generic type "dict"``, and
+  ``cast(CursorResult[Any], ...)`` for the SQLAlchemy 2.0
+  ``UPDATE...RETURNING`` typing gap. ``backend.shared.models`` also
+  got a targeted fix (``metadata: Optional[dict] = None`` +
+  ``list[Any]`` for the heterogeneous ``serialized_log_events``) but
+  stays *out* of the strict-islands list — its pre-Python-3.9 bare
+  ``dict`` / ``list`` annotations would need a 14-site sweep to flip
+  strict.
+* **Frontend vitest run green locally** — 31 tests across 6 suites
+  (``client``, ``StatusCards``, ``IncidentList``, ``Header``,
+  ``MemoryPanel``, ``ToolsPanel``) pass in 27 s.
+* **Ruff flipped to fail-on-error in CI** after ``ruff check --fix``
+  (+ ``--unsafe-fixes``) drained 522 violations and targeted
+  per-file / per-rule ignores were added for the intentional
+  patterns (``SIM105``/``SIM102``/``SIM117`` stylistic choices,
+  ``E402`` test-bootstrap imports, ``B017`` blind-exception asserts in
+  token-collision tests, ``B024`` for the abstract-by-contract
+  ``BaseAgent``).
+* **CI workflow version bumps** — ``ruff==0.15.11``, ``mypy==1.20.2``
+  so GitHub Actions sees exactly the same violations local devs do.
+* **Zero behaviour changes** — backend suite still 706/9/1/0; every
+  commit in this pass was reviewed against the test suite before it
+  was staged.
 
 ### P4.1 delta
 

@@ -16,31 +16,27 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-import httpx
 import pytest
 
 from backend.shared.models import (
     ActivityType,
-    Incident,
     IncidentState,
     LogEvent,
 )
-from backend.tests.e2e.conftest import e2e, build_live_stack, LiveStack
+from backend.tests.e2e.conftest import LiveStack, e2e
 from backend.tests.e2e.fake_llm import (
-    FakeLLMClient,
-    Rule,
-    resolving_llm,
-    false_positive_llm,
-    never_resolves_llm,
-    DEFAULT_TRIAGE,
     DEFAULT_DETECTIVE,
     DEFAULT_SURGEON,
+    DEFAULT_TRIAGE,
     DEFAULT_VALIDATOR_RESOLVED,
     DEFAULT_VALIDATOR_UNRESOLVED,
+    FakeLLMClient,
+    Rule,
+    false_positive_llm,
+    never_resolves_llm,
 )
-
 
 pytestmark = [e2e]
 
@@ -126,7 +122,7 @@ async def test_fn04_trigger_resolves(stack: LiveStack):
     event = LogEvent(
         source_file="manual",
         line_content="ERROR: postgres pool exhausted",
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         matched_pattern="manual",
     )
     incident = await stack.orchestrator.handle_event(event)
@@ -319,7 +315,7 @@ async def test_fn09_watcher_ignores_non_matching_lines(stack: LiveStack):
     log_path = stack.root / "watched" / "app.log"
     log_path.write_text("")
 
-    task = await stack.watcher.start()
+    await stack.watcher.start()
     try:
         with open(log_path, "a", encoding="utf-8") as f:
             f.write("INFO: starting up\n")
@@ -347,7 +343,7 @@ async def test_fn10_watcher_detects_rotation_via_inode(stack: LiveStack):
     log_path = stack.root / "watched" / "app.log"
     log_path.write_text("ERROR: old error\n")
 
-    task = await stack.watcher.start()
+    await stack.watcher.start()
     try:
         # Let the first error be seen and drained
         for _ in range(20):
@@ -380,7 +376,7 @@ async def test_fn11_watcher_handles_truncate_in_place(stack: LiveStack):
     log_path = stack.root / "watched" / "app.log"
     log_path.write_text("ERROR: early error\n" * 10)  # large-ish
 
-    task = await stack.watcher.start()
+    await stack.watcher.start()
     try:
         # Drain whatever comes first
         await asyncio.sleep(0.15)
@@ -456,7 +452,7 @@ async def test_fn20_broadcaster_fires_on_incident_lifecycle(stack: LiveStack):
         event = LogEvent(
             source_file="manual",
             line_content="ERROR: SSE test",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             matched_pattern="manual",
         )
         incident = await stack.orchestrator.handle_event(event)

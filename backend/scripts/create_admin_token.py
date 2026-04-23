@@ -29,7 +29,7 @@ import argparse
 import asyncio
 import logging
 import sys
-from typing import Sequence
+from collections.abc import Sequence
 
 from backend.persistence.repositories.token_repo import TokenRepository
 from backend.persistence.session import build_database

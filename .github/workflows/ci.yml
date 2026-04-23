@@ -50,12 +50,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
           # Dev-only tooling used by this workflow.
-          pip install ruff==0.6.0 mypy==1.11.0
+          pip install ruff==0.15.11 mypy==1.20.2
 
       - name: Ruff (lint)
-        # Soft-fail for now; tighten to `--exit-non-zero-on-fix` after
-        # the P3.4 cleanup pass.
-        run: ruff check backend/ --output-format=github || true
+        # P4.5: after the retirement pass ``ruff check backend`` exits
+        # clean; flipped from ``|| true`` soft-fail to fail-on-error so
+        # any new lint regression blocks the merge.
+        run: ruff check backend/ --output-format=github
 
       - name: Mypy (typecheck)
         # P3.4c: pyproject.toml now enables ``disallow_untyped_defs`` +

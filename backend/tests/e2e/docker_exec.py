@@ -28,13 +28,11 @@ so the container is live. The harness then runs `docker exec sentry-backend …`
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 from dataclasses import dataclass
 
 import pytest
-
 
 CONTAINER_NAME = "sentry-backend"
 

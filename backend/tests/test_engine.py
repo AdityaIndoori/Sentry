@@ -2,17 +2,21 @@
 Tests for the Orchestrator engine — full lifecycle, handle_event, memory, status.
 """
 
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
-from datetime import datetime, timezone
 
-from backend.orchestrator.engine import Orchestrator, MAX_RESOLVED_INCIDENTS
-from backend.shared.models import Incident, IncidentState, LogEvent, MemoryEntry
-from backend.shared.config import (
-    AppConfig, SecurityConfig, SentryMode, MemoryConfig, WatcherConfig,
-)
+from backend.orchestrator.engine import MAX_RESOLVED_INCIDENTS, Orchestrator
 from backend.shared.circuit_breaker import CostCircuitBreaker
-
+from backend.shared.config import (
+    AppConfig,
+    MemoryConfig,
+    SecurityConfig,
+    SentryMode,
+    WatcherConfig,
+)
+from backend.shared.models import Incident, IncidentState, LogEvent
 
 # ═══════════════════════════════════════════════════════════════
 # FIXTURES
@@ -70,7 +74,7 @@ def log_event():
     return LogEvent(
         source_file="test.log",
         line_content="ERROR: Connection refused on port 5432",
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         matched_pattern="(?i)error",
     )
 
@@ -169,7 +173,7 @@ class TestOrchestratorInit:
 
         with patch("backend.orchestrator.engine.ServiceRegistry", return_value=mock_registry), \
              patch("backend.orchestrator.engine.IncidentGraphBuilder", return_value=mock_builder):
-            orch = Orchestrator(config, mock_llm, mock_tools, mock_memory, circuit_breaker)
+            Orchestrator(config, mock_llm, mock_tools, mock_memory, circuit_breaker)
 
         mock_registry.build_fingerprint.assert_not_called()
 

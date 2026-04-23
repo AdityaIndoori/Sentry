@@ -27,21 +27,23 @@ import logging
 import time
 import uuid
 from collections import deque
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
-from backend.shared.circuit_breaker import CostCircuitBreaker
-from backend.shared.config import AppConfig, SentryMode
-from backend.shared.interfaces import ILLMClient, IMemoryStore, IOrchestrator, IToolExecutor
-from backend.shared.models import (
-    Incident, IncidentSeverity, IncidentState,
-    LogEvent, MemoryEntry, ToolCall,
-)
 from backend.orchestrator.graph import IncidentGraphBuilder, IncidentGraphState
-from backend.shared.audit_log import ImmutableAuditLog
-from backend.shared.metrics import inc_circuit_breaker_trip, inc_incident
-from backend.shared.observability import get_telemetry
 from backend.services.registry import ServiceRegistry
+from backend.shared.audit_log import ImmutableAuditLog
+from backend.shared.circuit_breaker import CostCircuitBreaker
+from backend.shared.config import AppConfig
+from backend.shared.interfaces import ILLMClient, IMemoryStore, IOrchestrator, IToolExecutor
+from backend.shared.metrics import inc_circuit_breaker_trip, inc_incident
+from backend.shared.models import (
+    Incident,
+    IncidentState,
+    LogEvent,
+    MemoryEntry,
+)
+from backend.shared.observability import get_telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -70,16 +72,16 @@ class Orchestrator(IOrchestrator):
         tools: IToolExecutor,
         memory: IMemoryStore,
         circuit_breaker: CostCircuitBreaker,
-        audit_log: Optional[ImmutableAuditLog] = None,
+        audit_log: ImmutableAuditLog | None = None,
         vault=None,
         gateway=None,
         throttle=None,
         registry=None,
         *,
-        incident_repo: Optional[Any] = None,  # IncidentRepository; optional keyword
+        incident_repo: Any | None = None,  # IncidentRepository; optional keyword
         orchestrator_timeout_seconds: int = DEFAULT_ORCH_TIMEOUT_SECONDS,
         dedup_window_seconds: int = DEFAULT_DEDUP_WINDOW_SECONDS,
-        broadcaster: Optional[Any] = None,  # P2.4: IncidentBroadcaster; optional
+        broadcaster: Any | None = None,  # P2.4: IncidentBroadcaster; optional
     ):
         self._config = config
         self._llm = llm
@@ -200,7 +202,7 @@ class Orchestrator(IOrchestrator):
     # Main event handler
     # ------------------------------------------------------------------
 
-    async def handle_event(self, event: LogEvent) -> Optional[Incident]:
+    async def handle_event(self, event: LogEvent) -> Incident | None:
         """Process a log event through the LangGraph state machine.
 
         Terminal states (RESOLVED, IDLE, ESCALATED) are ALWAYS removed
@@ -225,7 +227,7 @@ class Orchestrator(IOrchestrator):
         ):
             return await self._handle_event_impl(event)
 
-    async def _handle_event_impl(self, event: LogEvent) -> Optional[Incident]:
+    async def _handle_event_impl(self, event: LogEvent) -> Incident | None:
         if self._cb.is_tripped:
             logger.warning("Circuit breaker tripped - skipping event")
             inc_circuit_breaker_trip()
@@ -240,7 +242,7 @@ class Orchestrator(IOrchestrator):
             )
             return None
 
-        incident_id = f"INC-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+        incident_id = f"INC-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
         incident = Incident(
             id=incident_id,
             symptom=event.line_content,
@@ -278,7 +280,7 @@ class Orchestrator(IOrchestrator):
                     self._graph.ainvoke(initial_state),
                     timeout=self._orch_timeout,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.error(
                     "Orchestrator timeout after %ds for %s — escalating",
                     self._orch_timeout, incident_id,
@@ -357,7 +359,7 @@ class Orchestrator(IOrchestrator):
             payload = {
                 "kind": kind,
                 "incident": incident.to_dict(),
-                "ts": datetime.now(timezone.utc).isoformat(),
+                "ts": datetime.now(UTC).isoformat(),
             }
             self._broadcaster.publish_nowait(payload)
         except Exception:  # pragma: no cover — defensive
@@ -371,7 +373,7 @@ class Orchestrator(IOrchestrator):
             root_cause=incident.root_cause or "Unknown",
             fix=incident.fix_applied or "None",
             vectors=incident.vectors or incident.symptom.lower().split()[:5],
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
         )
         await self._memory.save(entry)
 

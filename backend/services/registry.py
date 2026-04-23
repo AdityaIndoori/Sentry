@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 class ServiceRegistry:
     """
     Builds ServiceContext from AppConfig.
-    
+
     This is deliberately simple — the intelligence lives in the AI agents,
     not in manual configuration files. The registry just tells agents
     WHERE to look; they figure out the rest by reading the code.

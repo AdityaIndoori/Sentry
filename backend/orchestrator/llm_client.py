@@ -12,7 +12,6 @@ Production hardening:
 import asyncio
 import json
 import logging
-from typing import Optional, Union
 
 import anthropic
 
@@ -68,7 +67,7 @@ async def _retry_with_backoff(coro_factory, operation_name: str) -> dict:
                 timeout=LLM_CALL_TIMEOUT_SECONDS,
             )
             return result
-        except asyncio.TimeoutError:
+        except TimeoutError:
             last_error = TimeoutError(
                 f"{operation_name} timed out after {LLM_CALL_TIMEOUT_SECONDS}s"
             )
@@ -146,7 +145,7 @@ class OpusLLMClient(ILLMClient):
         self,
         prompt: str,
         effort: str = "low",
-        tools: Optional[list] = None,
+        tools: list | None = None,
     ) -> dict:
         if not self._config.api_key or self._config.api_key.startswith("sk-ant-your"):
             logger.warning("No valid API key - returning simulated escalation response")
@@ -256,7 +255,7 @@ class BedrockGatewayLLMClient(ILLMClient):
         self,
         prompt: str,
         effort: str = "low",
-        tools: Optional[list] = None,
+        tools: list | None = None,
     ) -> dict:
         if not self._config.api_key or not self._config.base_url:
             logger.warning("Bedrock Gateway not configured - returning simulated escalation")
@@ -274,7 +273,7 @@ class BedrockGatewayLLMClient(ILLMClient):
         kwargs: dict = {
             "model": self._config.model,
             "max_tokens": self._config.max_tokens,
-            "messages": [{"role": "system", "content": system_prompt}] + messages,
+            "messages": [{"role": "system", "content": system_prompt}, *messages],
         }
 
         # Convert Anthropic-style tool definitions to OpenAI function-calling format

@@ -11,7 +11,6 @@ the tools it needs, nothing more.
 
 import logging
 from dataclasses import dataclass, field
-from typing import List, Optional
 
 from backend.shared.vault import AgentRole
 
@@ -23,7 +22,7 @@ class ToolDefinition:
     """A registered tool with its access control list."""
     name: str
     description: str = ""
-    allowed_roles: List[AgentRole] = field(default_factory=list)
+    allowed_roles: list[AgentRole] = field(default_factory=list)
     is_active: bool = False  # True = write/mutate, False = read-only
 
 
@@ -41,7 +40,7 @@ class TrustedToolRegistry:
     def register(
         self,
         name: str,
-        allowed_roles: List[AgentRole],
+        allowed_roles: list[AgentRole],
         description: str = "",
         is_active: bool = False,
     ) -> None:
@@ -77,7 +76,7 @@ class TrustedToolRegistry:
             if role in tool.allowed_roles
         ]
 
-    def get_tool(self, name: str) -> Optional[ToolDefinition]:
+    def get_tool(self, name: str) -> ToolDefinition | None:
         """Get a tool definition by name."""
         return self._tools.get(name)
 

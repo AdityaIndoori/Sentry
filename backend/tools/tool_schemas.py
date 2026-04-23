@@ -42,7 +42,7 @@ class ApplyPatchArgs(BaseModel):
 
 class RestartServiceArgs(BaseModel):
     """Arguments for restart_service tool.
-    
+
     No parameters needed — the restart command is configured
     via the SERVICE_RESTART_CMD environment variable.
     """

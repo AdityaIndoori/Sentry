@@ -16,10 +16,9 @@ import secrets
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from threading import Lock
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +38,7 @@ class NonHumanIdentity:
     agent_id: str          # e.g. "triage-a1b2c3"
     role: AgentRole
     fingerprint: str       # SHA-256 of creation params
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 @dataclass
@@ -72,7 +71,7 @@ class IVault(ABC):
     @abstractmethod
     def issue_credential(
         self, agent_id: str, scope: str, ttl_seconds: int = 60
-    ) -> Optional[JITCredential]:
+    ) -> JITCredential | None:
         """Issue a Just-In-Time credential for a specific scope."""
 
     @abstractmethod
@@ -88,7 +87,7 @@ class IVault(ABC):
         """KILL SWITCH: Revoke ALL credentials immediately. Returns count revoked."""
 
     @abstractmethod
-    def get_agent(self, agent_id: str) -> Optional[NonHumanIdentity]:
+    def get_agent(self, agent_id: str) -> NonHumanIdentity | None:
         """Look up an agent by ID."""
 
 
@@ -132,7 +131,7 @@ class LocalVault(IVault):
 
     def issue_credential(
         self, agent_id: str, scope: str, ttl_seconds: int = 60
-    ) -> Optional[JITCredential]:
+    ) -> JITCredential | None:
         """Issue a short-lived JIT credential."""
         if self._killed:
             logger.warning(f"Vault killed - refusing credential for {agent_id}")
@@ -211,7 +210,7 @@ class LocalVault(IVault):
             logger.critical(f"KILL SWITCH: Revoked {count} credentials")
             return count
 
-    def get_agent(self, agent_id: str) -> Optional[NonHumanIdentity]:
+    def get_agent(self, agent_id: str) -> NonHumanIdentity | None:
         """Look up an agent by ID."""
         return self._agents.get(agent_id)
 

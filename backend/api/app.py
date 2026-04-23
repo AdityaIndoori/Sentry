@@ -33,8 +33,7 @@ import logging
 import os
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -49,8 +48,8 @@ from backend.shared.factory import build_container
 from backend.shared.models import LogEvent
 from backend.shared.security import SecurityGuard
 from backend.shared.settings import get_settings
-from backend.shared.vault import AgentRole
 from backend.shared.tool_registry import create_default_registry
+from backend.shared.vault import AgentRole
 
 logger = logging.getLogger(__name__)
 
@@ -96,13 +95,13 @@ _gateway = None  # type: ignore[var-annotated]
 _audit_log = None  # type: ignore[var-annotated]
 _throttle = None  # type: ignore[var-annotated]
 _registry = None  # type: ignore[var-annotated]
-_watcher_task: Optional[asyncio.Task] = None
+_watcher_task: asyncio.Task | None = None
 _watcher_ctl_lock: asyncio.Lock = asyncio.Lock()
 
 
 # ─── Helpers to read services from either the container or the globals ─────
 
-def _get_container(request: Request) -> Optional[ServiceContainer]:
+def _get_container(request: Request) -> ServiceContainer | None:
     """Return the ServiceContainer attached to this app, if any."""
     try:
         return request.app.state.container  # type: ignore[union-attr]
@@ -211,7 +210,7 @@ class ModeChangeRequest(BaseModel):
 # ─── App factory ────────────────────────────────────────────────────────────
 
 
-def create_app(container: Optional[ServiceContainer] = None) -> FastAPI:
+def create_app(container: ServiceContainer | None = None) -> FastAPI:
     """Build a FastAPI app, optionally pre-wired to an existing ServiceContainer.
 
     * When ``container`` is provided (E2E tests, alternate deployments),
@@ -303,6 +302,7 @@ def _register_routes(app: FastAPI) -> None:
           are still safe no-ops everywhere.
         """
         from fastapi.responses import Response
+
         from backend.shared import metrics as _metrics
 
         try:
@@ -324,7 +324,7 @@ def _register_routes(app: FastAPI) -> None:
         and stays open even when the auth token registry is non-empty
         (see :class:`backend.api.auth.AuthMiddleware`).
         """
-        return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+        return {"status": "ok", "timestamp": datetime.now(UTC).isoformat()}
 
     @app.get("/api/ready")
     async def ready(request: Request):
@@ -363,7 +363,7 @@ def _register_routes(app: FastAPI) -> None:
         # db_reachable: SELECT 1 with a 2-second cap. Skipped when
         # Postgres is not configured (JSON store mode).
         db_reachable = True
-        db_error: Optional[str] = None
+        db_error: str | None = None
         settings = container.settings if container is not None else None
         database_url = getattr(settings, "database_url", None) if settings else None
         if database_url and container is not None and container.database is not None:
@@ -383,7 +383,7 @@ def _register_routes(app: FastAPI) -> None:
         # log directory (the one location on the hot path that MUST
         # accept writes).
         disk_writable = True
-        disk_error: Optional[str] = None
+        disk_error: str | None = None
         if cfg is not None:
             probe_dir = _os.path.dirname(cfg.audit_log_path) or "."
             try:
@@ -460,7 +460,7 @@ def _register_routes(app: FastAPI) -> None:
                 yield (
                     "event: connected\n"
                     f"data: {_json.dumps({'ok': True})}\n\n"
-                ).encode("utf-8")
+                ).encode()
 
                 while True:
                     # Disconnect detection: starlette marks the request
@@ -473,7 +473,7 @@ def _register_routes(app: FastAPI) -> None:
                         event = await _asyncio.wait_for(
                             queue.get(), timeout=HEARTBEAT_SECONDS,
                         )
-                    except _asyncio.TimeoutError:
+                    except TimeoutError:
                         # No event this window — send a heartbeat comment.
                         yield b": keepalive\n\n"
                         continue
@@ -493,7 +493,7 @@ def _register_routes(app: FastAPI) -> None:
                     yield (
                         f"event: {kind}\n"
                         f"data: {data}\n\n"
-                    ).encode("utf-8")
+                    ).encode()
 
         from fastapi.responses import StreamingResponse
         return StreamingResponse(
@@ -569,7 +569,7 @@ def _register_routes(app: FastAPI) -> None:
         event = LogEvent(
             source_file=req.source,
             line_content=sanitized_message,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             matched_pattern="manual",
         )
         incident = await orch.handle_event(event)

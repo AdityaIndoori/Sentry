@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ class ServiceContainer:
 
     # Watcher->orchestrator dispatch task (owned by the container so
     # shutdown can cancel it cleanly).
-    watcher_task: Optional[asyncio.Task] = None
+    watcher_task: asyncio.Task | None = None
 
     # Serializes concurrent calls to /api/watcher/start and
     # /api/watcher/stop so two concurrent requests can't spawn duplicate

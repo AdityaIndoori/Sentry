@@ -14,8 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import and_, select
 
@@ -63,7 +62,7 @@ class IncidentRepository:
     # Writes
     # ------------------------------------------------------------------
 
-    async def save(self, incident: Incident, fingerprint: Optional[str] = None) -> None:
+    async def save(self, incident: Incident, fingerprint: str | None = None) -> None:
         """Upsert an incident + its activity log + vectors."""
         async with self._db.sessionmaker() as session:
             row = await session.get(IncidentRow, incident.id)
@@ -114,14 +113,14 @@ class IncidentRepository:
                 return
             row.state = new_state.value
             if new_state in (IncidentState.RESOLVED, IncidentState.ESCALATED):
-                row.resolved_at = datetime.now(timezone.utc)
+                row.resolved_at = datetime.now(UTC)
             await session.commit()
 
     # ------------------------------------------------------------------
     # Reads
     # ------------------------------------------------------------------
 
-    async def get(self, incident_id: str) -> Optional[Incident]:
+    async def get(self, incident_id: str) -> Incident | None:
         async with self._db.sessionmaker() as session:
             row = await session.get(IncidentRow, incident_id)
         return _row_to_incident(row) if row else None
@@ -164,7 +163,7 @@ class IncidentRepository:
         """
         if not fingerprint:
             return False
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=window_seconds)
+        cutoff = datetime.now(UTC) - timedelta(seconds=window_seconds)
         async with self._db.sessionmaker() as session:
             result = await session.execute(
                 select(IncidentRow.id)

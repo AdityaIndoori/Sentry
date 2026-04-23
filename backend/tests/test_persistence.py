@@ -9,7 +9,7 @@ same code paths run against real Postgres in CI / integration.
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -29,7 +29,6 @@ from backend.shared.models import (
     LogEvent,
     MemoryEntry,
 )
-
 
 # ──────────────────────────────────────────────────────────────────────
 # Fixture: one fresh file-backed SQLite database per test.
@@ -179,6 +178,7 @@ class TestPostgresAuditLog:
         # (In real Postgres a trigger would block this; SQLite has no such
         # trigger — which is why we enforce via the sync repo API too.)
         from sqlalchemy import update
+
         from backend.persistence.models import AuditLogRow
         async with db.sessionmaker() as session:
             await session.execute(
@@ -279,7 +279,7 @@ class TestIncidentRepository:
         for i in range(5):
             inc = Incident(
                 id=f"R{i}", symptom="x", state=IncidentState.RESOLVED,
-                resolved_at=datetime.now(timezone.utc),
+                resolved_at=datetime.now(UTC),
             )
             await repo.save(inc)
         resolved = await repo.list_resolved(limit=3)

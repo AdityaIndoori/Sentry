@@ -3,19 +3,23 @@ TDD tests for FastAPI endpoints.
 Tests ALL API endpoints by mocking global state (_orchestrator, _watcher, _config).
 """
 
-import os
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
-from httpx import AsyncClient, ASGITransport
-from datetime import datetime, timezone
+from httpx import ASGITransport, AsyncClient
 
 from backend.api.app import app
-from backend.shared.models import Incident, IncidentState, MemoryEntry, LogEvent
 from backend.shared.config import (
-    AppConfig, SecurityConfig, SentryMode, WatcherConfig,
-    MemoryConfig, AnthropicConfig, BedrockGatewayConfig, LLMProvider,
+    AnthropicConfig,
+    AppConfig,
+    BedrockGatewayConfig,
+    LLMProvider,
+    MemoryConfig,
+    SecurityConfig,
+    SentryMode,
+    WatcherConfig,
 )
-
+from backend.shared.models import Incident, IncidentState, MemoryEntry
 
 # ═══════════════════════════════════════════════════════════════
 # HELPERS

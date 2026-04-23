@@ -4,6 +4,7 @@ Uses git apply when available, with pure-Python fallback for robustness.
 """
 
 import asyncio
+import contextlib
 import logging
 import os
 import re
@@ -53,9 +54,6 @@ def _apply_unified_diff(original: str, diff: str) -> str | None:
         idx = start_line - 1  # Convert 1-indexed to 0-indexed
 
         # Build removal and addition lists from the hunk
-        removals = []
-        additions = []
-        context_offset = 0
         new_block = []
 
         for hl in hunk_lines:
@@ -153,7 +151,7 @@ class ApplyPatchTool:
 
         try:
             # Read the original file
-            with open(full_path, "r", encoding="utf-8", errors="replace") as f:
+            with open(full_path, encoding="utf-8", errors="replace") as f:
                 original = f.read()
 
             # Try git apply first (fast, reliable when it works)
@@ -180,16 +178,14 @@ class ApplyPatchTool:
             backup_msg = f" Backup at {backup_path}" if backup_path else ""
             return {"success": True, "output": f"Patch applied to {file_path} (python).{backup_msg}"}
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return {"success": False, "error": "Patch operation timed out"}
         except Exception as e:
             logger.error(f"apply_patch error: {e}")
             # Restore backup on error
             if backup_path and os.path.isfile(backup_path):
-                try:
+                with contextlib.suppress(OSError):
                     shutil.copyfile(backup_path, full_path)
-                except OSError:
-                    pass
             return {"success": False, "error": str(e)}
 
     async def _try_git_apply(self, diff: str) -> dict | None:

@@ -7,8 +7,8 @@ StateGraph in `backend.orchestrator.graph`. There is no SupervisorAgent
 
 __all__ = [
     "base_agent",
-    "triage_agent",
     "detective_agent",
     "surgeon_agent",
+    "triage_agent",
     "validator_agent",
 ]

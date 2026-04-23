@@ -2,9 +2,7 @@
 TDD tests for CostCircuitBreaker and RateLimiter.
 """
 
-import time
-import pytest
-from backend.shared.circuit_breaker import CostCircuitBreaker, RateLimiter
+from backend.shared.circuit_breaker import CostCircuitBreaker
 
 
 class TestCostCircuitBreaker:

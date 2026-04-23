@@ -6,25 +6,31 @@ Covers: individual tools, tool_schemas Pydantic models, executor hardening
 
 import asyncio
 import os
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from pydantic import ValidationError
 
-from backend.shared.security import SecurityGuard
-from backend.shared.circuit_breaker import RateLimiter
-from backend.shared.models import ToolCall, ToolCategory, ToolResult
 from backend.shared.config import SecurityConfig, SentryMode
-from backend.tools.read_only_tools import ReadFileTool, GrepSearchTool
+from backend.shared.models import ToolCall, ToolCategory
+from backend.shared.security import SecurityGuard
 from backend.tools.active_tools import RunDiagnosticsTool
+from backend.tools.executor import (
+    TOOL_MAX_RETRIES,
+    ToolExecutor,
+    _is_tool_transient,
+)
+from backend.tools.read_only_tools import GrepSearchTool, ReadFileTool
 from backend.tools.restart_tool import RestartServiceTool
 from backend.tools.tool_schemas import (
-    ReadFileArgs, GrepSearchArgs, FetchDocsArgs,
-    RunDiagnosticsArgs, ApplyPatchArgs, RestartServiceArgs,
-    pydantic_to_input_schema, TOOL_ARG_MODELS,
-)
-from backend.tools.executor import (
-    ToolExecutor, _is_tool_transient,
-    TOOL_MAX_RETRIES, TOOL_TIMEOUT_SECONDS,
+    TOOL_ARG_MODELS,
+    ApplyPatchArgs,
+    FetchDocsArgs,
+    GrepSearchArgs,
+    ReadFileArgs,
+    RestartServiceArgs,
+    RunDiagnosticsArgs,
+    pydantic_to_input_schema,
 )
 
 
@@ -632,7 +638,7 @@ class TestExecutorReadOnlyToolDefinitions:
         """get_tool_definitions() must still return all 6 tools."""
         executor = ToolExecutor(security_guard, project_root)
         all_defs = executor.get_tool_definitions()
-        ro_defs = executor.get_read_only_tool_definitions()
+        executor.get_read_only_tool_definitions()
         assert len(all_defs) == 6
 
 
@@ -780,7 +786,7 @@ class TestRunDiagnosticsActiveMode:
         with patch("asyncio.create_subprocess_shell", new_callable=AsyncMock) as mock_sub:
             mock_proc = AsyncMock()
             mock_sub.return_value = mock_proc
-            with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError()):
+            with patch("asyncio.wait_for", side_effect=TimeoutError()):
                 result = await tool.execute("ps aux")
                 assert result["success"] is False
                 assert "timed out" in result["error"].lower()
@@ -843,7 +849,7 @@ class TestRestartServiceActiveMode:
              patch("asyncio.create_subprocess_shell", new_callable=AsyncMock) as mock_sub:
             mock_proc = AsyncMock()
             mock_sub.return_value = mock_proc
-            with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError()):
+            with patch("asyncio.wait_for", side_effect=TimeoutError()):
                 result = await tool.execute()
                 assert result["success"] is False
                 assert "timed out" in result["error"].lower()

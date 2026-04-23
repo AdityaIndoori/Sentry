@@ -32,11 +32,12 @@ at boot, during admin mutations, and by the CLI.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Optional, Sequence
+from datetime import UTC, datetime
+from typing import Any, cast
 
-from sqlalchemy import select, update
+from sqlalchemy import CursorResult, select, update
 
 from backend.persistence.models import ApiTokenRow
 from backend.persistence.session import Database
@@ -59,7 +60,7 @@ class StoredToken:
     role: str
     scopes: tuple[str, ...]
     created_at: datetime
-    revoked_at: Optional[datetime]
+    revoked_at: datetime | None
 
     @property
     def is_revoked(self) -> bool:
@@ -98,7 +99,7 @@ class TokenRepository:
             name=name,
             role=role,
             scopes=list(scopes),
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
             revoked_at=None,
         )
         async with self._db.sessionmaker() as session:
@@ -115,12 +116,12 @@ class TokenRepository:
     # Read
     # ------------------------------------------------------------------
 
-    async def get(self, token_id: str) -> Optional[StoredToken]:
+    async def get(self, token_id: str) -> StoredToken | None:
         async with self._db.sessionmaker() as session:
             row = await session.get(ApiTokenRow, token_id)
         return self._row_to_stored(row) if row else None
 
-    async def get_by_hash(self, token_hash: str) -> Optional[StoredToken]:
+    async def get_by_hash(self, token_hash: str) -> StoredToken | None:
         async with self._db.sessionmaker() as session:
             stmt = select(ApiTokenRow).where(ApiTokenRow.token_hash == token_hash)
             row = (await session.execute(stmt)).scalar_one_or_none()
@@ -141,7 +142,7 @@ class TokenRepository:
 
     async def revoke(self, token_id: str) -> bool:
         """Mark ``token_id`` as revoked. Returns True if a row was updated."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self._db.sessionmaker() as session:
             stmt = (
                 update(ApiTokenRow)
@@ -150,7 +151,7 @@ class TokenRepository:
                 .values(revoked_at=now)
                 .execution_options(synchronize_session=False)
             )
-            result = await session.execute(stmt)
+            result = cast(CursorResult[Any], await session.execute(stmt))
             await session.commit()
         updated = result.rowcount or 0
         if updated:
@@ -159,7 +160,7 @@ class TokenRepository:
 
     async def revoke_by_hash(self, token_hash: str) -> bool:
         """Alternative revocation path keyed by token_hash."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self._db.sessionmaker() as session:
             stmt = (
                 update(ApiTokenRow)
@@ -168,7 +169,7 @@ class TokenRepository:
                 .values(revoked_at=now)
                 .execution_options(synchronize_session=False)
             )
-            result = await session.execute(stmt)
+            result = cast(CursorResult[Any], await session.execute(stmt))
             await session.commit()
         return bool(result.rowcount or 0)
 
@@ -189,4 +190,4 @@ class TokenRepository:
         )
 
 
-__all__ = ["TokenRepository", "StoredToken"]
+__all__ = ["StoredToken", "TokenRepository"]

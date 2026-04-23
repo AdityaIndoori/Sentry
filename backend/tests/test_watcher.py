@@ -2,10 +2,9 @@
 Tests for watcher/log_watcher.py — log file monitoring.
 """
 
-import asyncio
 import os
+
 import pytest
-from datetime import datetime, timezone
 
 from backend.shared.config import WatcherConfig
 from backend.shared.models import LogEvent
@@ -209,7 +208,7 @@ class TestLogWatcherPermissionError:
         watcher = LogWatcher(config)
 
         # Make file unreadable by patching open to raise PermissionError
-        from unittest.mock import patch, mock_open
+        from unittest.mock import patch
         with patch("builtins.open", side_effect=PermissionError("Access denied")):
             # os.path.getsize still works, but open fails
             await watcher._check_file(log_file)

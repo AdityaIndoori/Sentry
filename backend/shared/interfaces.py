@@ -4,7 +4,7 @@ Following Dependency Inversion Principle - depend on abstractions, not concretio
 """
 
 from abc import ABC, abstractmethod
-from typing import AsyncIterator, Optional
+from collections.abc import AsyncIterator
 
 from .models import (
     Incident,
@@ -39,7 +39,7 @@ class ILLMClient(ABC):
         self,
         prompt: str,
         effort: str = "low",
-        tools: Optional[list] = None,
+        tools: list | None = None,
     ) -> dict:
         """Send analysis request to LLM and return response."""
 
@@ -62,14 +62,14 @@ class IToolExecutor(ABC):
     @abstractmethod
     def get_read_only_tool_definitions(self) -> list:
         """Return only read-only tool definitions (no apply_patch, restart_service).
-        
+
         Used by the Diagnosis agent which must investigate but never modify.
         """
 
     @abstractmethod
     def get_remediation_tool_definitions(self) -> list:
         """Return tools for the Remediation agent: read_file + active tools.
-        
+
         Excludes grep_search, fetch_docs, run_diagnostics to prevent the LLM
         from wasting tool loops on investigation instead of applying fixes.
         """
@@ -115,7 +115,7 @@ class IOrchestrator(ABC):
     """Interface for the core orchestration engine."""
 
     @abstractmethod
-    async def handle_event(self, event: LogEvent) -> Optional[Incident]:
+    async def handle_event(self, event: LogEvent) -> Incident | None:
         """Process a log event through the state machine."""
 
     @abstractmethod

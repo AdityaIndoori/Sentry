@@ -13,10 +13,10 @@ import logging
 from typing import Any
 
 from backend.agents.base_agent import BaseAgent
-from backend.shared.vault import AgentRole, IVault
 from backend.shared.ai_gateway import AIGateway
 from backend.shared.models import Incident
 from backend.shared.prompts import VERIFICATION_SYSTEM_PROMPT as VALIDATOR_SYSTEM_PROMPT
+from backend.shared.vault import AgentRole, IVault
 
 logger = logging.getLogger(__name__)
 

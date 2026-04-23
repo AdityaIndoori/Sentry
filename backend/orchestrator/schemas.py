@@ -11,13 +11,13 @@ Provider-agnostic 3-tier validation strategy:
 import json
 import logging
 import re
+
 from pydantic import BaseModel, Field, ValidationError
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 
-def _try_extract_json(text: str) -> Optional[dict]:
+def _try_extract_json(text: str) -> dict | None:
     """
     Attempt to extract a JSON object from LLM text output.
 
@@ -236,7 +236,7 @@ class RemediationResult(BaseModel):
     success: bool = Field(default=False, description="Whether the fix succeeded")
 
     @classmethod
-    def parse_safe(cls, text: str, tool_names: list[str] = None) -> "RemediationResult":
+    def parse_safe(cls, text: str, tool_names: list[str] | None = None) -> "RemediationResult":
         """
         3-tier parse: JSON → regex fallback.
         """
@@ -252,7 +252,7 @@ class RemediationResult(BaseModel):
         return cls.parse_from_text(text, tool_names)
 
     @classmethod
-    def parse_from_text(cls, text: str, tool_names: list[str] = None) -> "RemediationResult":
+    def parse_from_text(cls, text: str, tool_names: list[str] | None = None) -> "RemediationResult":
         """Parse fix description from remediation output."""
         fix_description = ""
         text_lower = text.lower()

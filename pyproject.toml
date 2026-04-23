@@ -39,11 +39,27 @@ ignore = [
   "B008",   # FastAPI Depends(...) in defaults is the idiomatic pattern
   "B904",   # "raise from" is nice-to-have, not a correctness bug
   "SIM108", # ternary style preference, not a correctness issue
+  # ── P4.5 retirement pass: these are *intentional* patterns, not bugs.
+  "SIM105", # ``try/except/pass`` is clearer than contextlib.suppress in
+            # hot-path shutdown code where readers scan for the error.
+  "SIM102", # Nested ``if`` is sometimes clearer than a long ``and`` chain.
+  "SIM117", # Nested ``with`` blocks are sometimes clearer than a flat
+            # comma-joined one, especially when the inner context is
+            # conditional or shortlived.
+  "RUF012", # ``ClassVar`` annotation for mutable class-level defaults is
+            # a Python 3.12+ feature we don't uniformly adopt yet.
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Tests are allowed to use assert + star imports freely.
-"backend/tests/**" = ["F403", "F405", "F811", "B011"]
+# Tests are allowed to use assert + star imports freely. E402 is
+# excused because several test files gate their imports behind
+# ``sys.path.insert`` or ``os.environ[...] =`` setup that must run
+# first. B017 is excused because a handful of tests deliberately
+# ``pytest.raises(Exception)`` as a positive assertion of "any error
+# propagates" (e.g. token-collision detection) — narrowing the
+# exception type would weaken the test.
+"backend/tests/**" = ["F403", "F405", "F811", "B011", "E402", "B017", "RUF043"]
+"backend/agents/base_agent.py" = ["B024"]  # ABC intentional, subclasses add the abstract methods
 
 # ────────────────────────────────────────────────────────────────────
 # mypy — P3.4c scaffolding for ``--strict``.
@@ -70,6 +86,13 @@ warn_redundant_casts = true
 warn_unreachable = true
 check_untyped_defs = true
 no_implicit_optional = true
+# Empty directory left over from the P3.4b JSONMemoryStore deletion —
+# on some Windows checkouts the ACL becomes un-listable, which aborts
+# the mypy walker. The directory contains no Python files either way.
+exclude = [
+  "^backend/memory/",
+  "^backend/persistence/migrations/versions/",
+]
 # Strict-ish defaults — per-module overrides below relax these for the
 # packages that aren't yet annotated. When an override is deleted the
 # module is held to the strict rules globally.
@@ -161,7 +184,11 @@ warn_return_any = false
 
 # ── Strict islands ─────────────────────────────────────────────────
 # Modules that ARE fully annotated and held to strict mode. Adding a
-# module here is a one-line commitment that it stays clean.
+# module here is a one-line commitment that it stays clean. Expanded
+# in the P4.5 retirement pass to cover the newer persistence + settings
+# surfaces that we'd already finished annotating — historical gaps
+# (silent ``# type: ignore`` graveyards, ``Missing type arguments for
+# generic type "dict"``) were flushed out as part of the same pass.
 [[tool.mypy.overrides]]
 module = [
   "backend.shared.observability",
@@ -170,8 +197,11 @@ module = [
   "backend.shared.secrets",
   "backend.shared.principal",
   "backend.shared.circuit_breaker",
+  "backend.shared.settings",
   "backend.api.auth",
   "backend.api.broadcaster",
+  "backend.persistence.session",
+  "backend.persistence.repositories.token_repo",
 ]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true

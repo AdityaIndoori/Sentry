@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 class ServiceContext:
     """
     Lightweight context about the monitored service.
-    
+
     Built automatically from .env paths — no YAML needed.
     Agents receive this as part of their prompts so they know
     WHERE to look, then they figure out HOW the service works

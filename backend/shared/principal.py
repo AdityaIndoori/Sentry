@@ -27,8 +27,7 @@ import hashlib
 import hmac
 import secrets
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import FrozenSet, Optional
+from datetime import UTC, datetime
 
 
 @dataclass(frozen=True)
@@ -55,8 +54,8 @@ class Principal:
     id: str
     name: str
     role: str
-    scopes: FrozenSet[str]
-    issued_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    scopes: frozenset[str]
+    issued_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def has_scope(self, scope: str) -> bool:
         """Return True iff this Principal is authorized for ``scope``.
@@ -96,7 +95,7 @@ def generate_token(nbytes: int = 32) -> str:
 
 __all__ = [
     "Principal",
-    "hash_token",
     "constant_time_equals",
     "generate_token",
+    "hash_token",
 ]

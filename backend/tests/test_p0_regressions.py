@@ -28,9 +28,7 @@ These tests lock in fixes for:
 
 from __future__ import annotations
 
-import asyncio
 import os
-import tempfile
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -46,9 +44,8 @@ from backend.shared.config import (
     SentryMode,
     WatcherConfig,
 )
-from backend.shared.models import Incident, IncidentState, LogEvent, MemoryEntry
+from backend.shared.models import Incident, IncidentState, LogEvent
 from backend.watcher.log_watcher import LogWatcher
-
 
 # ═══════════════════════════════════════════════════════════════
 # Fix #1 — ESCALATED incident leak
@@ -201,7 +198,7 @@ class TestWatcherUtf8SafeDecode:
 
     def test_decode_handles_complete_input(self):
         # Use explicit UTF-8 bytes so the source file is pure ASCII.
-        text, carry = LogWatcher._safe_utf8_decode("café\n".encode("utf-8"))
+        text, carry = LogWatcher._safe_utf8_decode("café\n".encode())
         assert text == "café\n"
         assert carry == b""
 
@@ -217,7 +214,7 @@ class TestWatcherUtf8SafeDecode:
         """Write bytes such that a codepoint is cut at the read boundary."""
         path = tmp_path / "app.log"
         # Build content with a multibyte char and trailing newline.
-        content = "ERROR: utf-8 café\n".encode("utf-8")
+        content = "ERROR: utf-8 café\n".encode()
         path.write_bytes(content)
 
         cfg = WatcherConfig(
@@ -475,7 +472,7 @@ class TestAuditModeValidationOrdering:
 #         are unchanged.
 
 
-from backend.shared.vault import LocalVault, JITCredential
+from backend.shared.vault import JITCredential, LocalVault
 
 
 def _build_vault_wired_executor(tmp_path):
@@ -773,15 +770,15 @@ class TestLLMCredentialEnforcement:
         vault that returns ``None`` on ``issue_credential`` (simulating
         a no-vault environment) still reach the LLM — the zero-trust
         check only kicks in when a real vault is wired.
-        
+
         This test uses a real LocalVault but registers the agent, then
         removes it from the registry — so ``issue_credential`` returns
         None but the vault is still an object. We expect PermissionError
         because this IS a real vault that denied the request.
         """
-        from backend.shared.vault import LocalVault, AgentRole
         from backend.agents.base_agent import BaseAgent
         from backend.shared.ai_gateway import AIGateway
+        from backend.shared.vault import AgentRole, LocalVault
 
         vault = LocalVault()
         llm = AsyncMock()

@@ -10,7 +10,7 @@ paths; threading.Lock is correct and cheap for the low-contention paths here.
 import logging
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from .models import CostTracker
 
@@ -76,12 +76,12 @@ class CostCircuitBreaker:
 
     def _check_window_reset_locked(self) -> None:
         """Auto-reset if the time window has elapsed. MUST hold self._lock."""
-        elapsed = datetime.now(timezone.utc) - self._tracker.window_start
+        elapsed = datetime.now(UTC) - self._tracker.window_start
         if elapsed > timedelta(minutes=self._window_minutes):
             self._tracker.reset()
             self._tripped = False
 
-    def get_status(self) -> dict:
+    def get_status(self) -> dict[str, float | int | bool]:
         with self._lock:
             self._check_window_reset_locked()
             return {
@@ -101,7 +101,7 @@ class RateLimiter:
     calls cannot both return True inside the cooldown window.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._last_call: dict[str, float] = {}
         self._lock = threading.Lock()
 

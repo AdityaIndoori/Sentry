@@ -10,18 +10,15 @@ phase that will flip them green.
 
 from __future__ import annotations
 
-import asyncio
 import os
 from pathlib import Path
 
 import pytest
 
-from backend.shared.models import ToolCall
 from backend.shared.config import SentryMode
+from backend.shared.models import ToolCall
 from backend.shared.vault import AgentRole, JITCredential
-from backend.tests.e2e.conftest import e2e, LiveStack
-from backend.tests.e2e.fake_llm import resolving_llm
-
+from backend.tests.e2e.conftest import LiveStack, e2e
 
 pytestmark = [e2e]
 
@@ -481,7 +478,6 @@ async def test_sec23_tool_without_credential_rejected(stack: LiveStack):
 async def test_sec24_agent_path_issues_and_verifies_credential(stack: LiveStack):
     """E2E SEC-24: the legitimate BaseAgent path (_call_tool) issues a
     JIT credential, the executor verifies it, and the call succeeds."""
-    import time as _time
 
     # Register a Detective agent directly with the vault the stack uses.
     nhi = stack.vault.register_agent(AgentRole.DETECTIVE)
@@ -688,7 +684,8 @@ def test_sec35_no_docker_socket_in_container():
     `SERVICE_RESTART_CMD` (webhook / docker-socket-proxy / systemctl).
     """
     from backend.tests.e2e.docker_exec import (
-        require_running_backend, exec_in_backend,
+        exec_in_backend,
+        require_running_backend,
     )
     require_running_backend()
 
@@ -708,7 +705,8 @@ def test_sec36_container_non_root():
     effectively root via group membership — P0.2 removed that line.
     """
     from backend.tests.e2e.docker_exec import (
-        require_running_backend, exec_in_backend,
+        exec_in_backend,
+        require_running_backend,
     )
     require_running_backend()
 
@@ -732,7 +730,8 @@ def test_sec37_container_capabilities_dropped():
     must contain `ALL`.
     """
     from backend.tests.e2e.docker_exec import (
-        require_running_backend, inspect_backend,
+        inspect_backend,
+        require_running_backend,
     )
     require_running_backend()
 
@@ -752,7 +751,8 @@ def test_sec38_workspace_mount_is_readonly():
     The writable staging area is /app/patchable (separate volume).
     """
     from backend.tests.e2e.docker_exec import (
-        require_running_backend, exec_in_backend,
+        exec_in_backend,
+        require_running_backend,
     )
     require_running_backend()
 

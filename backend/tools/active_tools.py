@@ -5,10 +5,7 @@ Requires ACTIVE mode. In AUDIT mode, logs intent only.
 
 import asyncio
 import logging
-import os
-import shutil
 
-from backend.shared.circuit_breaker import RateLimiter
 from backend.shared.security import SecurityGuard
 from backend.tools.tool_schemas import RunDiagnosticsArgs, pydantic_to_input_schema
 
@@ -51,7 +48,7 @@ class RunDiagnosticsTool:
                 err = stderr.decode("utf-8", errors="replace")
                 output += f"\nSTDERR: {err}"
             return {"success": proc.returncode == 0, "output": output[:5000]}
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return {"success": False, "error": "Command timed out (30s)"}
         except Exception as e:
             return {"success": False, "error": str(e)}

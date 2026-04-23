@@ -4,19 +4,14 @@ Covers OpusLLMClient, BedrockGatewayLLMClient, create_llm_client factory,
 and production hardening: retry/timeout, transient error detection, backoff.
 """
 
-import asyncio
 import json
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from backend.shared.config import (
-    AnthropicConfig,
-    AppConfig,
-    BedrockGatewayConfig,
-    LLMProvider,
-    SecurityConfig,
-)
+import pytest
+
 from backend.orchestrator.llm_client import (
+    LLM_BACKOFF_BASE_SECONDS,
+    LLM_MAX_RETRIES,
     BedrockGatewayLLMClient,
     OpusLLMClient,
     _effort_to_budget,
@@ -24,11 +19,14 @@ from backend.orchestrator.llm_client import (
     _no_api_key_response,
     _retry_with_backoff,
     create_llm_client,
-    LLM_CALL_TIMEOUT_SECONDS,
-    LLM_MAX_RETRIES,
-    LLM_BACKOFF_BASE_SECONDS,
 )
-
+from backend.shared.config import (
+    AnthropicConfig,
+    AppConfig,
+    BedrockGatewayConfig,
+    LLMProvider,
+    SecurityConfig,
+)
 
 # ---------------------------------------------------------------------------
 # Helper builders
@@ -386,7 +384,7 @@ class TestRetryWithBackoff:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                raise asyncio.TimeoutError()
+                raise TimeoutError()
             return {"text": "ok after timeout", "error": None}
 
         with patch("backend.orchestrator.llm_client.asyncio.sleep", new_callable=AsyncMock):

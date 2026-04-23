@@ -39,7 +39,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from typing import AsyncIterator, Dict, Optional
+from collections.abc import AsyncIterator
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ class IncidentBroadcaster:
 
     def __init__(self, *, queue_size: int = DEFAULT_QUEUE_SIZE) -> None:
         self._queue_size = queue_size
-        self._subscribers: Dict[int, asyncio.Queue] = {}
+        self._subscribers: dict[int, asyncio.Queue[Any]] = {}
         self._next_id = 0
         self._lock = asyncio.Lock()
         self._closed = False
@@ -69,7 +70,7 @@ class IncidentBroadcaster:
     # Publish side — called by the orchestrator.
     # ------------------------------------------------------------------
 
-    def publish_nowait(self, event: dict) -> int:
+    def publish_nowait(self, event: dict[str, Any]) -> int:
         """Push ``event`` to every live subscriber without awaiting.
 
         Returns the number of subscribers that actually received the
@@ -107,7 +108,7 @@ class IncidentBroadcaster:
     # ------------------------------------------------------------------
 
     @contextlib.asynccontextmanager
-    async def subscribe(self) -> AsyncIterator[asyncio.Queue]:
+    async def subscribe(self) -> AsyncIterator[asyncio.Queue[Any]]:
         """Yield a queue that receives every future event.
 
         Use as::
@@ -123,7 +124,7 @@ class IncidentBroadcaster:
         if self._closed:
             # Still yield a queue so callers don't have to special-case;
             # it just never receives events.
-            q: asyncio.Queue = asyncio.Queue(maxsize=self._queue_size)
+            q: asyncio.Queue[Any] = asyncio.Queue(maxsize=self._queue_size)
             try:
                 yield q
             finally:
@@ -173,4 +174,4 @@ class IncidentBroadcaster:
                 pass
 
 
-__all__ = ["IncidentBroadcaster", "DEFAULT_QUEUE_SIZE"]
+__all__ = ["DEFAULT_QUEUE_SIZE", "IncidentBroadcaster"]

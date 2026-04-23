@@ -27,35 +27,36 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from typing import Any, ContextManager, Iterator, Optional
+from collections.abc import Iterator
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
 try:  # pragma: no cover — optional dep
-    from opentelemetry import trace  # type: ignore
-    from opentelemetry.sdk.resources import Resource  # type: ignore
-    from opentelemetry.sdk.trace import TracerProvider  # type: ignore
-    from opentelemetry.sdk.trace.export import (  # type: ignore
+    from opentelemetry import trace
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import (
         BatchSpanProcessor,
         ConsoleSpanExporter,
     )
 
     try:
-        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (  # type: ignore
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
             OTLPSpanExporter,
         )
     except ImportError:  # pragma: no cover
-        OTLPSpanExporter = None  # type: ignore[assignment,misc]
+        OTLPSpanExporter = None
 
     _OTEL_AVAILABLE = True
 except ImportError:  # pragma: no cover
-    trace = None  # type: ignore[assignment]
-    Resource = None  # type: ignore[assignment,misc]
-    TracerProvider = None  # type: ignore[assignment,misc]
-    BatchSpanProcessor = None  # type: ignore[assignment,misc]
-    ConsoleSpanExporter = None  # type: ignore[assignment,misc]
-    OTLPSpanExporter = None  # type: ignore[assignment,misc]
+    trace = None
+    Resource = None
+    TracerProvider = None
+    BatchSpanProcessor = None
+    ConsoleSpanExporter = None
+    OTLPSpanExporter = None
     _OTEL_AVAILABLE = False
 
 
@@ -66,7 +67,7 @@ def _maybe_instrument_fastapi(app: Any) -> None:  # pragma: no cover
     if not _OTEL_AVAILABLE:
         return
     try:
-        from opentelemetry.instrumentation.fastapi import (  # type: ignore
+        from opentelemetry.instrumentation.fastapi import (
             FastAPIInstrumentor,
         )
         FastAPIInstrumentor.instrument_app(app)
@@ -79,7 +80,7 @@ def _maybe_instrument_httpx() -> None:  # pragma: no cover
     if not _OTEL_AVAILABLE:
         return
     try:
-        from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor  # type: ignore
+        from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
         HTTPXClientInstrumentor().instrument()
     except Exception as exc:
         logger.debug("OTel: httpx instrumentation skipped: %s", exc)
@@ -89,7 +90,7 @@ def _maybe_instrument_asyncpg() -> None:  # pragma: no cover
     if not _OTEL_AVAILABLE:
         return
     try:
-        from opentelemetry.instrumentation.asyncpg import AsyncPGInstrumentor  # type: ignore
+        from opentelemetry.instrumentation.asyncpg import AsyncPGInstrumentor
         AsyncPGInstrumentor().instrument()
     except Exception as exc:
         logger.debug("OTel: asyncpg instrumentation skipped: %s", exc)
@@ -106,7 +107,7 @@ class Telemetry:
     null context manager.
     """
 
-    def __init__(self, tracer: Optional[Any] = None, service_name: str = "sentry") -> None:
+    def __init__(self, tracer: Any | None = None, service_name: str = "sentry") -> None:
         self._tracer = tracer
         self._service_name = service_name
 
@@ -120,10 +121,8 @@ class Telemetry:
         with self._tracer.start_as_current_span(name) as sp:  # pragma: no cover
             try:
                 for k, v in attrs.items():
-                    try:
+                    with contextlib.suppress(Exception):
                         sp.set_attribute(k, v)
-                    except Exception:
-                        pass
                 yield sp
             except Exception as exc:
                 try:

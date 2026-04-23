@@ -13,12 +13,12 @@ import logging
 from typing import Any
 
 from backend.agents.base_agent import BaseAgent
-from backend.shared.vault import AgentRole, IVault
-from backend.shared.ai_gateway import AIGateway
 from backend.shared.agent_throttle import AgentThrottle
-from backend.shared.tool_registry import TrustedToolRegistry
+from backend.shared.ai_gateway import AIGateway
 from backend.shared.models import Incident
 from backend.shared.prompts import DIAGNOSIS_SYSTEM_PROMPT as DETECTIVE_SYSTEM_PROMPT
+from backend.shared.tool_registry import TrustedToolRegistry
+from backend.shared.vault import AgentRole, IVault
 
 logger = logging.getLogger(__name__)
 
@@ -132,12 +132,12 @@ class DetectiveAgent(BaseAgent):
                             f"Tool result ({tool_name}): {safe_output[:2000]}"
                         )
                     except Exception as e:
-                        messages.append(f"Tool error ({tool_name}): {str(e)}")
+                        messages.append(f"Tool error ({tool_name}): {e!s}")
 
                 # Cap total prompt size to prevent token explosion
                 full_text = "\n\n".join(messages)
                 if len(full_text) > 50000:
-                    messages = [messages[0]] + messages[-5:]
+                    messages = [messages[0], *messages[-5:]]
 
             return {
                 "root_cause": "Investigation inconclusive after max tool loops",

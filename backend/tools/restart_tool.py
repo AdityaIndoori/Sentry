@@ -73,10 +73,10 @@ class RestartServiceTool:
                 err = stderr.decode("utf-8", errors="replace")
                 return {"success": False, "error": f"Restart failed: {err}"}
 
-            output = stdout.decode("utf-8", errors="replace")
+            stdout.decode("utf-8", errors="replace")
             logger.info(f"Service restarted via: {restart_cmd}")
             return {"success": True, "output": f"Restarted service ({restart_cmd})"}
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return {"success": False, "error": "Restart timed out (30s)"}
         except Exception as e:
             return {"success": False, "error": str(e)}

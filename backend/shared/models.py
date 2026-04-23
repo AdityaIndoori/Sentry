@@ -4,9 +4,9 @@ Pure data classes with no external dependencies (Clean Architecture inner layer)
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 
 class IncidentSeverity(Enum):
@@ -51,7 +51,7 @@ class LogEvent:
     """Represents a detected log event that triggers analysis."""
     source_file: str
     line_content: str
-    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
     matched_pattern: str = ""
     line_number: int = 0
 
@@ -93,18 +93,18 @@ class Incident:
     symptom: str
     state: IncidentState = IncidentState.TRIAGE
     severity: IncidentSeverity = IncidentSeverity.MEDIUM
-    root_cause: Optional[str] = None
-    fix_applied: Optional[str] = None
-    commit_id: Optional[str] = None  # Git commit hash of the fix (if auto-committed)
-    triage_result: Optional[str] = None
+    root_cause: str | None = None
+    fix_applied: str | None = None
+    commit_id: str | None = None  # Git commit hash of the fix (if auto-committed)
+    triage_result: str | None = None
     log_events: list = field(default_factory=list)
     activity_log: list = field(default_factory=list)  # list[ActivityEntry]
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    resolved_at: Optional[datetime] = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    resolved_at: datetime | None = None
     retry_count: int = 0
     cost_usd: float = 0.0
     vectors: list = field(default_factory=list)
-    current_agent_action: Optional[str] = None  # live status text
+    current_agent_action: str | None = None  # live status text
 
     def log_activity(
         self,
@@ -112,11 +112,11 @@ class Incident:
         phase: str,
         title: str,
         detail: str = "",
-        metadata: dict = None,
+        metadata: dict | None = None,
     ) -> None:
         """Append an activity entry to the incident log."""
         entry = ActivityEntry(
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             activity_type=activity_type,
             phase=phase,
             title=title,
@@ -127,8 +127,10 @@ class Incident:
 
     def to_dict(self) -> dict:
         # Bug fix #13: log_events may contain LogEvent objects or dicts.
-        # Ensure all entries are serializable dicts.
-        serialized_log_events = []
+        # Ensure all entries are serializable dicts — we accept either
+        # dicts or an opaque string fallback so downstream serializers
+        # never see a raw pyobject.
+        serialized_log_events: list[Any] = []
         for evt in self.log_events:
             if isinstance(evt, dict):
                 serialized_log_events.append(evt)
@@ -204,7 +206,7 @@ class ToolResult:
     tool_name: str
     success: bool
     output: str = ""
-    error: Optional[str] = None
+    error: str | None = None
     audit_only: bool = False  # True if tool was blocked due to AUDIT mode
 
     def to_dict(self) -> dict:
@@ -254,7 +256,7 @@ class CostTracker:
     """Tracks API cost to enforce circuit breaker."""
     total_input_tokens: int = 0
     total_output_tokens: int = 0
-    window_start: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    window_start: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     # Claude pricing (approximate)
     INPUT_COST_PER_1K: float = 0.015
@@ -273,4 +275,4 @@ class CostTracker:
     def reset(self) -> None:
         self.total_input_tokens = 0
         self.total_output_tokens = 0
-        self.window_start = datetime.now(timezone.utc)
+        self.window_start = datetime.now(UTC)

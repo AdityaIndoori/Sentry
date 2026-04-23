@@ -4,7 +4,7 @@ Tests path traversal, command injection, URL validation, and mode enforcement.
 """
 
 import os
-import pytest
+
 from backend.shared.config import SecurityConfig, SentryMode
 from backend.shared.security import SecurityGuard
 

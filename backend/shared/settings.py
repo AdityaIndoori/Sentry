@@ -26,7 +26,6 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, Dict, Optional, Tuple
 
 from dotenv import load_dotenv
 
@@ -41,7 +40,6 @@ from backend.shared.config import (
     WatcherConfig,
 )
 
-
 # ---------------------------------------------------------------------------
 # Try to use pydantic-settings v2 for real validation; fall back to a plain
 # dataclass if the package isn't installed (older envs).
@@ -55,7 +53,7 @@ except Exception:  # pragma: no cover
     _HAS_PYDANTIC_SETTINGS = False
 
 
-def _env(name: str, default: Optional[str] = None) -> Optional[str]:
+def _env(name: str, default: str | None = None) -> str | None:
     val = os.environ.get(name)
     return val if val is not None else default
 
@@ -128,7 +126,7 @@ class Settings:
     memory_max_incidents_before_compaction: int = 50
 
     # --- Watcher -------------------------------------------------------------
-    watch_paths: Tuple[str, ...] = ("/var/log/syslog", "/var/log/app/*.log")
+    watch_paths: tuple[str, ...] = ("/var/log/syslog", "/var/log/app/*.log")
     poll_interval_seconds: float = 2.0
 
     # --- API server ----------------------------------------------------------
@@ -136,13 +134,13 @@ class Settings:
     api_port: int = 8000
 
     # --- P1.2 / P1.4 / P2.x forward-looking knobs (unused yet) ---------------
-    database_url: Optional[str] = None
-    api_auth_token: Optional[str] = None
+    database_url: str | None = None
+    api_auth_token: str | None = None
     secrets_backend: str = "env"  # env | file | sops | vault
-    secrets_vault_addr: Optional[str] = None
-    secrets_vault_role: Optional[str] = None
-    secrets_sops_file: Optional[str] = None
-    otel_exporter_otlp_endpoint: Optional[str] = None
+    secrets_vault_addr: str | None = None
+    secrets_vault_role: str | None = None
+    secrets_sops_file: str | None = None
+    otel_exporter_otlp_endpoint: str | None = None
     prometheus_enabled: bool = True
     service_name: str = "sentry"
     orchestrator_timeout_seconds: int = 300
@@ -201,7 +199,7 @@ class Settings:
 # ---------------------------------------------------------------------------
 if _HAS_PYDANTIC_SETTINGS:
 
-    class _PydanticSettings(BaseSettings):  # type: ignore[misc,valid-type]
+    class _PydanticSettings(BaseSettings):
         """Pydantic v2 model for env parsing + validation."""
 
         model_config = SettingsConfigDict(
@@ -243,13 +241,13 @@ if _HAS_PYDANTIC_SETTINGS:
         API_HOST: str = "0.0.0.0"
         API_PORT: int = 8000
 
-        DATABASE_URL: Optional[str] = None
-        API_AUTH_TOKEN: Optional[str] = None
+        DATABASE_URL: str | None = None
+        API_AUTH_TOKEN: str | None = None
         SECRETS_BACKEND: str = "env"
-        SECRETS_VAULT_ADDR: Optional[str] = None
-        SECRETS_VAULT_ROLE: Optional[str] = None
-        SECRETS_SOPS_FILE: Optional[str] = None
-        OTEL_EXPORTER_OTLP_ENDPOINT: Optional[str] = None
+        SECRETS_VAULT_ADDR: str | None = None
+        SECRETS_VAULT_ROLE: str | None = None
+        SECRETS_SOPS_FILE: str | None = None
+        OTEL_EXPORTER_OTLP_ENDPOINT: str | None = None
         PROMETHEUS_ENABLED: bool = True
         SERVICE_NAME: str = "sentry"
         ORCHESTRATOR_TIMEOUT_SECONDS: int = 300
@@ -383,7 +381,7 @@ def _cached_settings() -> Settings:
     load_dotenv()
     if _HAS_PYDANTIC_SETTINGS:
         try:
-            return _PydanticSettings().to_settings()  # type: ignore[name-defined]
+            return _PydanticSettings().to_settings()
         except Exception:  # pragma: no cover - defensive, fall through
             return _build_settings_from_env()
     return _build_settings_from_env()

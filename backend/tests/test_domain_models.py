@@ -2,13 +2,17 @@
 Tests for shared/models.py — domain model serialization and behavior.
 """
 
-import pytest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from backend.shared.models import (
-    LogEvent, ActivityEntry, ActivityType, Incident,
-    IncidentState, IncidentSeverity, ToolCall, ToolCategory,
-    ToolResult, MemoryEntry, CostTracker,
+    ActivityEntry,
+    ActivityType,
+    CostTracker,
+    Incident,
+    IncidentState,
+    LogEvent,
+    MemoryEntry,
+    ToolResult,
 )
 
 
@@ -35,7 +39,7 @@ class TestLogEvent:
 class TestActivityEntry:
     def test_to_dict(self):
         entry = ActivityEntry(
-            timestamp=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            timestamp=datetime(2025, 1, 1, tzinfo=UTC),
             activity_type=ActivityType.TOOL_CALL,
             phase="diagnosis",
             title="Called read_file",
@@ -50,7 +54,7 @@ class TestActivityEntry:
 
     def test_to_dict_truncates_detail(self):
         entry = ActivityEntry(
-            timestamp=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            timestamp=datetime(2025, 1, 1, tzinfo=UTC),
             activity_type=ActivityType.LLM_CALL,
             phase="triage",
             title="LLM analysis",
@@ -93,7 +97,7 @@ class TestIncident:
     def test_to_dict_with_resolved_at(self):
         inc = Incident(
             id="INC-001", symptom="error",
-            resolved_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            resolved_at=datetime(2025, 1, 1, tzinfo=UTC),
         )
         d = inc.to_dict()
         assert d["resolved_at"] is not None

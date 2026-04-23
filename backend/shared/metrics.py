@@ -39,13 +39,12 @@ The metric names follow the OBS-01..03 contract in ``ops/E2E_TEST_CATALOG.md``:
 from __future__ import annotations
 
 import logging
-from typing import Tuple
 
 logger = logging.getLogger(__name__)
 
 
 try:  # pragma: no cover — tested via availability gate
-    from prometheus_client import (  # type: ignore[import-not-found]
+    from prometheus_client import (
         CONTENT_TYPE_LATEST,
         CollectorRegistry,
         Counter,
@@ -54,9 +53,9 @@ try:  # pragma: no cover — tested via availability gate
     _AVAILABLE = True
 except ImportError:  # pragma: no cover — dev machines without the dep
     CONTENT_TYPE_LATEST = "text/plain; version=0.0.4; charset=utf-8"
-    CollectorRegistry = None  # type: ignore[assignment,misc]
-    Counter = None  # type: ignore[assignment,misc]
-    generate_latest = None  # type: ignore[assignment]
+    CollectorRegistry = None
+    Counter = None
+    generate_latest = None
     _AVAILABLE = False
 
 
@@ -109,9 +108,9 @@ if _AVAILABLE:
         registry=REGISTRY,
     )
 else:
-    REGISTRY = None  # type: ignore[assignment]
-    _INCIDENTS = _TOOL_CALLS = _LLM_CALLS = None  # type: ignore[assignment]
-    _LLM_COST = _WATCHER_EVENTS = _CB_TRIPS = None  # type: ignore[assignment]
+    REGISTRY = None
+    _INCIDENTS = _TOOL_CALLS = _LLM_CALLS = None
+    _LLM_COST = _WATCHER_EVENTS = _CB_TRIPS = None
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -181,7 +180,7 @@ def inc_circuit_breaker_trip() -> None:
         logger.exception("metrics: inc_circuit_breaker_trip failed")
 
 
-def render_metrics() -> Tuple[bytes, str]:
+def render_metrics() -> tuple[bytes, str]:
     """Return ``(body, content_type)`` for the ``/metrics`` endpoint.
 
     Raises
@@ -198,12 +197,12 @@ def render_metrics() -> Tuple[bytes, str]:
 
 
 __all__ = [
-    "is_available",
-    "inc_incident",
-    "inc_tool_call",
-    "inc_llm_call",
-    "observe_llm_cost",
-    "inc_watcher_event",
     "inc_circuit_breaker_trip",
+    "inc_incident",
+    "inc_llm_call",
+    "inc_tool_call",
+    "inc_watcher_event",
+    "is_available",
+    "observe_llm_cost",
     "render_metrics",
 ]

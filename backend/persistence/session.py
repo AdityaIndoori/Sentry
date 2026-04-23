@@ -15,8 +15,9 @@ bootstrap the schema (used in tests where Alembic is overkill).
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import AsyncIterator
+from typing import Any
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -74,8 +75,8 @@ def build_database(database_url: str, *, echo: bool = False) -> Database:
     """
     # SQLite has limitations with pooling — use the StaticPool for in-memory
     # and the NullPool for file-based to avoid "database is locked" in tests.
-    connect_args: dict = {}
-    kwargs: dict = {"echo": echo}
+    connect_args: dict[str, Any] = {}
+    kwargs: dict[str, Any] = {"echo": echo}
     if database_url.startswith("sqlite"):
         # aiosqlite ignores check_same_thread, but harmless
         connect_args["check_same_thread"] = False

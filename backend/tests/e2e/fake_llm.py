@@ -27,14 +27,13 @@ Typical use:
 
 from __future__ import annotations
 
-import asyncio
-from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Optional
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Any
 
 from backend.shared.interfaces import ILLMClient
 
-
-RulePredicate = Callable[[str, str, Optional[list]], bool]
+RulePredicate = Callable[[str, str, list | None], bool]
 
 
 @dataclass
@@ -45,11 +44,11 @@ class Rule:
     # to simulate timeouts). If returns a value, that value becomes the
     # response (overriding `response`). If raises, the exception bubbles
     # up.
-    side_effect: Optional[Callable[..., Awaitable[Any]]] = None
+    side_effect: Callable[..., Awaitable[Any]] | None = None
     name: str = "rule"
 
     @classmethod
-    def when_prompt_contains(cls, needle: str, response: dict, name: str = "") -> "Rule":
+    def when_prompt_contains(cls, needle: str, response: dict, name: str = "") -> Rule:
         """Match any LLM call whose prompt contains `needle`."""
         return cls(
             predicate=lambda prompt, effort, tools: needle in (prompt or ""),
@@ -58,7 +57,7 @@ class Rule:
         )
 
     @classmethod
-    def when_prompt_contains_any(cls, needles: list[str], response: dict, name: str = "") -> "Rule":
+    def when_prompt_contains_any(cls, needles: list[str], response: dict, name: str = "") -> Rule:
         """Match any LLM call whose prompt contains any of `needles`."""
         return cls(
             predicate=lambda prompt, effort, tools: any(n in (prompt or "") for n in needles),
@@ -67,7 +66,7 @@ class Rule:
         )
 
     @classmethod
-    def when_effort_is(cls, effort: str, response: dict, name: str = "") -> "Rule":
+    def when_effort_is(cls, effort: str, response: dict, name: str = "") -> Rule:
         return cls(
             predicate=lambda prompt, eff, tools: eff == effort,
             response=response,
@@ -75,15 +74,15 @@ class Rule:
         )
 
     @classmethod
-    def always(cls, response: dict, name: str = "always") -> "Rule":
+    def always(cls, response: dict, name: str = "always") -> Rule:
         return cls(predicate=lambda *a, **kw: True, response=response, name=name)
 
     @classmethod
-    def default(cls, response: dict) -> "Rule":
+    def default(cls, response: dict) -> Rule:
         return cls.always(response, name="default")
 
     @classmethod
-    def raising(cls, predicate: RulePredicate, exc: BaseException, name: str = "raise") -> "Rule":
+    def raising(cls, predicate: RulePredicate, exc: BaseException, name: str = "raise") -> Rule:
         async def _raise(*_a, **_kw):
             raise exc
         return cls(predicate=predicate, response={}, side_effect=_raise, name=name)
@@ -153,7 +152,7 @@ class FakeLLMClient(ILLMClient):
         self._call_log: list[dict] = []
 
     async def analyze(
-        self, prompt: str, effort: str, tools: Optional[list] = None
+        self, prompt: str, effort: str, tools: list | None = None
     ) -> dict:
         # Record every call for observability tests
         call = {

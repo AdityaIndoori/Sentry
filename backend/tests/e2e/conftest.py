@@ -24,27 +24,21 @@ import asyncio
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
 
 import httpx
 import pytest
 from fastapi import FastAPI
 
 from backend.api.app import create_app
-from backend.shared.container import ServiceContainer
 from backend.shared.config import (
     AppConfig,
-    MemoryConfig,
-    SecurityConfig,
     SentryMode,
-    WatcherConfig,
 )
+from backend.shared.container import ServiceContainer
 from backend.shared.factory import build_container
 from backend.shared.security import SecurityGuard
 from backend.shared.settings import Settings
-
 from backend.tests.e2e.fake_llm import FakeLLMClient, resolving_llm
-
 
 # ──────────────────────────────────────────────────────────────────────
 # Gate: all e2e tests require SENTRY_E2E=1. Saves 30+ seconds in the
@@ -130,7 +124,7 @@ class LiveStack:
 
 
 def _build_settings_for_tmp(tmp_root: Path, mode: SentryMode,
-                            watch_paths: Optional[tuple]) -> Settings:
+                            watch_paths: tuple | None) -> Settings:
     """Produce a Settings instance pointing at the per-test tmpdir."""
     (tmp_root / "workspace").mkdir(exist_ok=True)
     (tmp_root / "workspace" / "config").mkdir(exist_ok=True)
@@ -166,9 +160,9 @@ def _build_settings_for_tmp(tmp_root: Path, mode: SentryMode,
     )
 
 
-def build_live_stack(tmp_root: Path, llm: Optional[FakeLLMClient] = None,
+def build_live_stack(tmp_root: Path, llm: FakeLLMClient | None = None,
                      mode: SentryMode = SentryMode.AUDIT,
-                     watch_paths: Optional[tuple] = None) -> LiveStack:
+                     watch_paths: tuple | None = None) -> LiveStack:
     """Construct a fully-wired in-process Sentry stack for E2E tests.
 
     Delegates to the canonical
@@ -209,9 +203,9 @@ def live_stack_factory(e2e_tmpdir: Path):
     """Factory for tests that need custom LLM scripts or modes."""
     created: list[LiveStack] = []
 
-    def _make(llm: Optional[FakeLLMClient] = None,
+    def _make(llm: FakeLLMClient | None = None,
               mode: SentryMode = SentryMode.AUDIT,
-              watch_paths: Optional[tuple] = None) -> LiveStack:
+              watch_paths: tuple | None = None) -> LiveStack:
         s = build_live_stack(e2e_tmpdir, llm=llm, mode=mode, watch_paths=watch_paths)
         created.append(s)
         return s

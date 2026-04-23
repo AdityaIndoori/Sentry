@@ -13,15 +13,12 @@ Covers:
 from __future__ import annotations
 
 import asyncio
-import os
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 from backend.shared.models import LogEvent, MemoryEntry
-from backend.tests.e2e.conftest import e2e, LiveStack
-
+from backend.tests.e2e.conftest import LiveStack, e2e
 
 pytestmark = [e2e]
 
@@ -124,9 +121,11 @@ async def test_conc08_orchestrator_timeout_escalates(live_stack_factory):
         }
 
     from backend.tests.e2e.fake_llm import (
-        FakeLLMClient, Rule,
-        DEFAULT_TRIAGE, DEFAULT_DETECTIVE, DEFAULT_SURGEON,
+        DEFAULT_DETECTIVE,
+        DEFAULT_SURGEON,
         DEFAULT_VALIDATOR_RESOLVED,
+        FakeLLMClient,
+        Rule,
     )
 
     llm = FakeLLMClient([

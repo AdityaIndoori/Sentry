@@ -9,17 +9,17 @@ Tests written FIRST before implementation:
 - Tool Registry (allowlist)
 """
 
-import time
 import json
 import os
 import tempfile
+import time
 
 import pytest
 
 from backend.shared.vault import (
-    AgentRole, LocalVault, NonHumanIdentity, JITCredential,
+    AgentRole,
+    LocalVault,
 )
-
 
 # ═══════════════════════════════════════════════════════════════
 # VAULT TESTS - Non-Human Identity & JIT Credentials
@@ -420,16 +420,16 @@ class TestAgentThrottle:
         return AgentThrottle(max_actions_per_minute=5)
 
     def test_allows_actions_within_limit(self, throttle):
-        for i in range(5):
+        for _i in range(5):
             assert throttle.is_allowed("agent-1", "tool_call")
 
     def test_blocks_actions_over_limit(self, throttle):
-        for i in range(5):
+        for _i in range(5):
             throttle.is_allowed("agent-1", "tool_call")
         assert not throttle.is_allowed("agent-1", "tool_call")
 
     def test_separate_agents_have_separate_limits(self, throttle):
-        for i in range(5):
+        for _i in range(5):
             throttle.is_allowed("agent-1", "tool_call")
         # Agent-2 should still be allowed
         assert throttle.is_allowed("agent-2", "tool_call")
@@ -501,7 +501,6 @@ class TestToolRegistry:
         assert "read_file" not in tools
 
     def test_get_tool_existing(self, registry):
-        from backend.shared.tool_registry import ToolDefinition
         registry.register("read_file", allowed_roles=[AgentRole.DETECTIVE], description="Read a file")
         tool = registry.get_tool("read_file")
         assert tool is not None
