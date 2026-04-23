@@ -1,6 +1,9 @@
 # 🛡️ Sentry — Self-Healing Server Monitor
 
+[![CI](https://github.com/AdityaIndoori/Sentry/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/AdityaIndoori/Sentry/actions/workflows/ci.yml)
+
 An autonomous AI service monitor. It uses a **multi-agent pipeline** to continuously monitor logs, diagnose errors, and fix them automatically. Agents interact through a **LangGraph orchestrator**, execute actions via secure **MCP (Model Context Protocol) tools**, and are governed by a **Zero Trust security** layer with 15 defense-in-depth controls.
+
 
 ## Architecture
 
@@ -179,33 +182,37 @@ docker compose up --build
 ### 3. Run Tests
 
 ```bash
-cd backend
-pip install -r requirements.txt
-cd ..
-python -m pytest
+# Backend (unit + E2E)
+cd backend && pip install -r requirements.txt && cd ..
+set SENTRY_E2E=1 && python -m pytest          # Windows
+# or: SENTRY_E2E=1 python -m pytest              # macOS/Linux
+
+# Frontend (vitest + vite build)
+cd frontend && npm ci && npm test -- --run && npm run build
 ```
 
-**Test Results: 442 tests passing — 97% coverage** (enforced minimum: 95%)
+**Backend:** `724 passed / 11 skipped / 1 xfailed / 0 failed` on CI
+(branch coverage **≥ 92%** enforced in `pytest.ini`, hard-fail gate).
+**Frontend:** `31 tests passed across 6 vitest suites`; `vite build`
+produces a 175 kB bundle (55 kB gzipped).
 
-| Test File | Tests | Covers |
-|-----------|------:|--------|
-| `test_zero_trust.py` | 62 | Vault NHI, AI Gateway, Audit Log, Throttle, Tool Registry |
-| `test_agents.py` | 59 | All 5 agent roles + Supervisor routing (9 paths) |
-| `test_tools.py` | 71 | Read-only tools, active tools, executor hardening, retry logic |
-| `test_schemas.py` | 46 | LLM output parsing for all agent response formats |
-| `test_llm_client.py` | 38 | Provider factory, Anthropic + Bedrock clients, error handling |
-| `test_api.py` | 29 | All REST endpoints, config, watcher start/stop |
-| `test_security.py` | 26 | Path validation, command whitelist, URL allow-list, stop file |
-| `test_engine.py` | 18 | Orchestrator lifecycle, circuit breaker, memory save, FIFO cap |
-| `test_watcher.py` | 14 | Log polling, file rotation, queue full, PermissionError |
-| `test_config.py` | 14 | 12-factor config loading, defaults, env var parsing |
-| `test_services.py` | 14 | Service registry, context builder, topology fingerprint |
-| `test_domain_models.py` | 22 | Pydantic domain models, serialization, defaults |
-| `test_patch_tool.py` | 11 | apply_patch audit + active mode, git apply, backup/restore |
-| `test_circuit_breaker.py` | 10 | Cost tracking, rate limiter, auto-halt thresholds |
-| `test_memory.py` | 6 | Memory store CRUD, similarity search, compaction |
+CI hardens this pipeline on every push + every PR: ruff + mypy
+(strict islands on 36 modules, ``--ignore-missing-imports``),
+pytest with coverage gate, vitest, vite build, Trivy filesystem +
+image scan, CycloneDX SBOM, and a docker multi-stage build that
+runs pytest inside the image itself (Dockerfile `test` stage).
+All four CI jobs are **hard-fail**; see the ![CI](https://github.com/AdityaIndoori/Sentry/actions/workflows/ci.yml/badge.svg?branch=master) badge at the top of this README for the current master status.
 
-Coverage is configured in `pytest.ini` and `.coveragerc`. The HTML report is generated at `htmlcov/index.html`.
+> The per-file test-count table that used to live here became stale
+> as the suite grew from ~440 to ~735 tests across P1–P4. The
+> canonical per-phase scoreboard (with historical deltas) lives in
+> [`ops/E2E_TEST_CATALOG.md`](ops/E2E_TEST_CATALOG.md) under
+> **Test Scoreboard**.
+
+Coverage is configured in `pytest.ini` and `.coveragerc`. The HTML
+report lands at `htmlcov/index.html`; the CI uploads `coverage.xml`
+as the ``backend-coverage`` artifact on every run.
+
 
 ## LLM Providers
 
@@ -371,9 +378,10 @@ All settings live in `.env` (copy from `.env.example`). Only **`ANTHROPIC_API_KE
 | **Service Awareness** | | | |
 | `SERVICE_HOST_PATH` | Host path to service source code (Docker mount) | — | ✅ |
 | `SERVICE_SOURCE_PATH` | Container path where agents read code | `/app/workspace` | |
-| **Memory** | | | |
-| `MEMORY_FILE_PATH` | Path to incident memory JSON | `/app/data/sentry_memory.json` | |
+| **Memory / Persistence** | | | |
+| `DATABASE_URL` | SQLAlchemy async URL for incidents, memory, audit log, API tokens. If unset, Sentry synthesises `sqlite+aiosqlite:///<data_dir>/sentry.db`. | _(auto-SQLite)_ | |
 | `MAX_INCIDENTS_COMPACT` | Compact memory after N incidents | `50` | |
+
 | **Server** | | | |
 | `API_HOST` | FastAPI bind address | `0.0.0.0` | |
 | `API_PORT` | FastAPI port | `8000` | |
@@ -396,11 +404,15 @@ All settings live in `.env` (copy from `.env.example`). Only **`ANTHROPIC_API_KE
 │   ├── services/         # Service Awareness Layer (NEW)
 │   │   ├── models.py         # ServiceContext — built from .env paths
 │   │   └── registry.py       # ServiceRegistry — builds context, no YAML needed
-│   ├── api/              # FastAPI REST endpoints
+│   ├── api/              # FastAPI REST endpoints (app.py, auth, broadcaster)
 │   ├── orchestrator/     # LangGraph state machine + LLM client
-│   ├── mcp_tools/        # MCP tool implementations
-│   ├── memory/           # JSON-based incident memory (RAG)
+│   ├── tools/            # MCP tool implementations (read_file, grep_search,
+│   │                     #   fetch_docs, apply_patch, restart_service, run_diagnostics)
+│   ├── persistence/      # SQLAlchemy models, async session, Alembic migrations,
+│   │                     #   repositories (incident, memory, audit, token) — P1.2+
+│   ├── scripts/          # Operator CLIs (create_admin_token, revoke_token, list_tokens)
 │   ├── watcher/          # Log file monitoring
+
 │   ├── shared/
 │   │   ├── vault.py          # NHI credential management (NEW)
 │   │   ├── ai_gateway.py     # Prompt injection & PII firewall (NEW)
@@ -412,25 +424,41 @@ All settings live in `.env` (copy from `.env.example`). Only **`ANTHROPIC_API_KE
 │   │   ├── security.py       # Path/command/URL validation
 │   │   ├── circuit_breaker.py # Cost tracking + auto-halt
 │   │   └── interfaces.py     # Abstract base classes (SOLID)
-│   ├── tests/                # 442 tests, 97% coverage
+│   ├── tests/                # ~735 tests (unit + E2E), ≥ 92% coverage
 │   │   ├── conftest.py           # Shared fixtures (security guards, tmp dirs)
+│   │   ├── e2e/                  # End-to-end suites (gated by SENTRY_E2E=1)
+│   │   │   ├── test_functional.py   # FN-* — the happy-path E2E catalog
+│   │   │   ├── test_security.py     # SEC-* — the attacker-facing E2E catalog
+│   │   │   └── test_concurrency.py  # CONC-* — races, storms, timeouts
 │   │   ├── test_zero_trust.py    # Vault, AI Gateway, Audit Log, Throttle, Tool Registry
 │   │   ├── test_agents.py        # All 5 agent roles + Supervisor routing
 │   │   ├── test_tools.py         # Read-only tools, active tools, executor hardening
 │   │   ├── test_schemas.py       # LLM output parsing for all response formats
 │   │   ├── test_llm_client.py    # Provider factory, Anthropic + Bedrock clients
 │   │   ├── test_api.py           # All REST endpoints, config, watcher
+│   │   ├── test_token_api.py     # REST /api/tokens admin endpoints (P4.6)
+│   │   ├── test_token_repo.py    # Postgres API-token repo + hydration (P4.2)
+│   │   ├── test_openapi_snapshot.py # Frozen OpenAPI surface (P4.4)
+│   │   ├── test_persistence.py   # PostgresMemoryRepo, IncidentRepository, AuditRepo
+│   │   ├── test_audit_log_immutability.py # SEC-30 append-only DB triggers (P4.8)
+│   │   ├── test_auth.py          # Principal, TokenRegistry, scope gating (P2.1)
+│   │   ├── test_broadcaster.py   # IncidentBroadcaster SSE fan-out (P2.4)
+│   │   ├── test_bug_regressions.py # Historical P0 regression locks
 │   │   ├── test_security.py      # Path, command, URL validation + stop file
 │   │   ├── test_engine.py        # Orchestrator lifecycle, circuit breaker, FIFO
+│   │   ├── test_graph_nodes.py   # LangGraph node + edge contracts
 │   │   ├── test_watcher.py       # Log polling, rotation, queue full, errors
 │   │   ├── test_config.py        # 12-factor config loading, defaults
 │   │   ├── test_services.py      # Service registry, context builder
+│   │   ├── test_secrets.py       # ISecretsProvider backends (P2.2)
+│   │   ├── test_metrics.py       # Prometheus counter contract (P2.3b)
 │   │   ├── test_domain_models.py # Pydantic domain models, serialization
 │   │   ├── test_patch_tool.py    # apply_patch audit + active, git apply
 │   │   ├── test_circuit_breaker.py # Cost tracking, rate limiter
-│   │   └── test_memory.py        # Memory store CRUD, similarity, compaction
+│   │   └── test_memory.py        # Memory repo CRUD, fingerprint
 │   ├── Dockerfile
 │   └── requirements.txt
+
 ├── frontend/
 │   ├── src/App.jsx       # React dashboard (Zero Trust panel)
 │   ├── Dockerfile
@@ -443,7 +471,8 @@ All settings live in `.env` (copy from `.env.example`). Only **`ANTHROPIC_API_KE
 
 ## Design Principles
 
-- **TDD:** 442 tests (97% coverage) — security, agents, tools, orchestrator, schemas, API, config, services, watcher
+- **TDD:** ~735 tests (≥ 92% coverage, hard-fail CI gate) — security, agents, tools, orchestrator, schemas, API, config, services, watcher, persistence, auth, broadcaster, metrics, secrets, audit-log immutability, OpenAPI contract
+
 - **SOLID:**
   - **S**ingle Responsibility: Each agent does one thing (triage OR diagnose OR fix OR verify)
   - **O**pen/Closed: Tool registry extensible without modifying agents
