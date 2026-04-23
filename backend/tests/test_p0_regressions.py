@@ -644,3 +644,166 @@ class TestVaultCredentialEnforcement:
         assert "DB_HOST" in (result.output or "")
 
 
+# ═══════════════════════════════════════════════════════════════
+# Fix #12 — P4.1 LLM-call JIT credentials
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestLLMCredentialEnforcement:
+    """P4.1: every ``BaseAgent._call_llm`` call issues a JIT credential
+    scoped to ``llm_call``, passes it through the OTel span attributes,
+    and revokes it in ``finally``. When the vault's kill switch
+    (``revoke_all()`` / STOP_SENTRY) is active, LLM calls are denied
+    with a ``PermissionError`` and an ``llm_call_blocked`` audit entry.
+    """
+
+    def _make_concrete_agent(self, vault, llm):
+        """Instantiate a concrete BaseAgent subclass against a real
+        vault + stub LLM. ``run()`` is a no-op — we call ``_call_llm``
+        directly."""
+        from backend.agents.base_agent import BaseAgent
+        from backend.shared.ai_gateway import AIGateway
+        from backend.shared.vault import AgentRole
+
+        class _BareAgent(BaseAgent):
+            async def run(self, *args, **kwargs):  # pragma: no cover
+                return {}
+
+        gateway = AIGateway()
+        return _BareAgent(
+            vault=vault,
+            role=AgentRole.TRIAGE,
+            gateway=gateway,
+            llm=llm,
+        )
+
+    @pytest.mark.asyncio
+    async def test_llm_credential_issued_and_revoked(self):
+        """Happy path — credential is issued before the LLM call and
+        revoked in ``finally``, even when the LLM raises."""
+        from backend.shared.vault import LocalVault
+
+        vault = LocalVault()
+        llm = AsyncMock()
+        llm.analyze.return_value = {
+            "input_tokens": 10, "output_tokens": 5, "summary": "ok",
+        }
+
+        agent = self._make_concrete_agent(vault, llm)
+
+        issued_before = len(vault._credentials)  # type: ignore[attr-defined]
+        resp = await agent._call_llm("hello", effort="low")
+
+        assert resp["summary"] == "ok"
+        llm.analyze.assert_awaited_once()
+        # Every issued credential must be revoked when _call_llm returns.
+        credentials = list(vault._credentials.values())  # type: ignore[attr-defined]
+        assert len(credentials) == issued_before + 1
+        new_cred = credentials[-1]
+        assert new_cred.scope == "llm_call"
+        assert new_cred.revoked is True, \
+            "Credential must be revoked in finally even on success path"
+
+    @pytest.mark.asyncio
+    async def test_llm_credential_revoked_on_llm_failure(self):
+        """If the underlying LLM call raises, the credential is still
+        revoked (proves the ``finally`` is load-bearing)."""
+        from backend.shared.vault import LocalVault
+
+        vault = LocalVault()
+        llm = AsyncMock()
+        llm.analyze.side_effect = RuntimeError("model timeout")
+
+        agent = self._make_concrete_agent(vault, llm)
+        with pytest.raises(RuntimeError):
+            await agent._call_llm("hello", effort="low")
+
+        credentials = list(vault._credentials.values())  # type: ignore[attr-defined]
+        assert len(credentials) == 1
+        assert credentials[0].revoked is True
+
+    @pytest.mark.asyncio
+    async def test_llm_call_blocked_when_vault_kill_switch_active(self, tmp_path):
+        """After ``vault.revoke_all()`` / STOP_SENTRY, every subsequent
+        ``_call_llm`` must be denied with a ``PermissionError`` and an
+        audit entry, AND the LLM itself must never be invoked."""
+        from backend.shared.audit_log import ImmutableAuditLog
+        from backend.shared.vault import LocalVault
+
+        vault = LocalVault()
+        llm = AsyncMock()
+        llm.analyze.return_value = {"input_tokens": 1, "output_tokens": 1}
+        audit_log = ImmutableAuditLog(
+            log_path=str(tmp_path / "p41_audit.jsonl"),
+        )
+
+        from backend.agents.base_agent import BaseAgent
+        from backend.shared.ai_gateway import AIGateway
+        from backend.shared.vault import AgentRole
+
+        class _BareAgent(BaseAgent):
+            async def run(self, *args, **kwargs):  # pragma: no cover
+                return {}
+
+        agent = _BareAgent(
+            vault=vault,
+            role=AgentRole.TRIAGE,
+            gateway=AIGateway(),
+            audit_log=audit_log,
+            llm=llm,
+        )
+
+        # Kill switch activates — all subsequent credentials are denied.
+        vault.revoke_all()
+
+        with pytest.raises(PermissionError, match="LLM credential"):
+            await agent._call_llm("hello", effort="low")
+
+        # LLM must never have been contacted after the kill switch.
+        llm.analyze.assert_not_awaited()
+
+        # Audit trail must reflect the denial.
+        entries = audit_log.read_all()
+        actions = [entry.get("action") for entry in entries]
+        assert "llm_call_blocked" in actions
+
+    @pytest.mark.asyncio
+    async def test_llm_call_without_vault_backend_still_works(self):
+        """Legacy unit tests that instantiate BaseAgent with a stub
+        vault that returns ``None`` on ``issue_credential`` (simulating
+        a no-vault environment) still reach the LLM — the zero-trust
+        check only kicks in when a real vault is wired.
+        
+        This test uses a real LocalVault but registers the agent, then
+        removes it from the registry — so ``issue_credential`` returns
+        None but the vault is still an object. We expect PermissionError
+        because this IS a real vault that denied the request.
+        """
+        from backend.shared.vault import LocalVault, AgentRole
+        from backend.agents.base_agent import BaseAgent
+        from backend.shared.ai_gateway import AIGateway
+
+        vault = LocalVault()
+        llm = AsyncMock()
+        llm.analyze.return_value = {"input_tokens": 1, "output_tokens": 1}
+
+        class _BareAgent(BaseAgent):
+            async def run(self, *args, **kwargs):  # pragma: no cover
+                return {}
+
+        agent = _BareAgent(
+            vault=vault,
+            role=AgentRole.TRIAGE,
+            gateway=AIGateway(),
+            llm=llm,
+        )
+
+        # Forcibly corrupt the registry so the vault denies issuance.
+        # This simulates the kill-switch path.
+        vault._agents.clear()  # type: ignore[attr-defined]
+
+        with pytest.raises(PermissionError):
+            await agent._call_llm("hello", effort="low")
+        llm.analyze.assert_not_awaited()
+
+

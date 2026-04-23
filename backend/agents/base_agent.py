@@ -88,9 +88,23 @@ class BaseAgent(ABC):
 
     async def _call_llm(self, prompt: str, effort: str, tools: list = None) -> dict:
         """Call the LLM. Automatically logs LLM_CALL and INFO activities.
-        
+
         This is the ONLY way to access the LLM from any agent.
         Direct access to self.__llm is blocked by name mangling.
+
+        P4.1: mirrors the P1.4 tool-credential pattern — every LLM call
+        requests a short-lived JIT credential from the vault scoped to
+        ``llm_call`` and revokes it in ``finally`` regardless of outcome.
+        The credential is stamped onto the OTel span so compromised
+        traces can be correlated back to a specific issuance. LLM clients
+        don't (yet) verify the credential; this still matters because:
+
+          * runaway / compromised agent code can't call the LLM without
+            presenting a valid, vault-issued, unrevoked credential ID —
+            ``STOP_SENTRY`` / ``vault.revoke_all()`` drains in-flight
+            calls the same way it drains tool calls;
+          * future ``ILLMClient`` wrappers (e.g. the P2.2 secrets-backed
+            client) can verify the credential to gate API-key access.
         """
         self._call_count += 1
         self._log_activity(
@@ -104,14 +118,61 @@ class BaseAgent(ABC):
         except Exception:  # pragma: no cover
             logger.exception("metrics: inc_llm_call failed")
 
-        # P2.3b-full: open an OTel span scoped to the LLM round-trip.
-        with get_telemetry().span(
-            "agent.llm_call",
-            agent=self._role.value,
-            effort=effort,
-            call_number=self._call_count,
-        ):
-            response = await self.__llm.analyze(prompt=prompt, effort=effort, tools=tools)
+        # P4.1: issue a JIT credential for this LLM call. Scope is
+        # ``llm_call`` with a 30-second TTL — longer than a single tool
+        # call because big-model latency can exceed the 10-second default.
+        # Revoked in ``finally`` so a malicious replay is blocked even if
+        # the raw token leaks mid-flight.
+        credential = None
+        try:
+            credential = self._vault.issue_credential(
+                self.agent_id, scope="llm_call", ttl_seconds=30,
+            )
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.warning(
+                f"Vault failed to issue LLM credential for {self.agent_id}: {exc}"
+            )
+
+        # If the vault is wired and denied the request, abort cleanly with
+        # an audit entry rather than silently bypassing zero-trust. When
+        # the vault is NOT wired (unit tests) credential stays ``None`` and
+        # we fall through to the legacy direct-call behaviour.
+        if credential is None and self._vault is not None:
+            # Distinguish "no vault configured" from "vault said no" —
+            # LocalVault.issue_credential returns None only on failure
+            # (unknown agent / revoked / kill-switch). Absence of a
+            # vault backend means self._vault is None, handled above.
+            self._audit(
+                "llm_call_blocked",
+                f"agent={self.agent_id} scope=llm_call",
+                "denied",
+            )
+            raise PermissionError(
+                f"Agent {self.agent_id} denied LLM credential "
+                f"(STOP_SENTRY / revoke_all may be active)"
+            )
+
+        try:
+            # P2.3b-full: open an OTel span scoped to the LLM round-trip.
+            with get_telemetry().span(
+                "agent.llm_call",
+                agent=self._role.value,
+                effort=effort,
+                call_number=self._call_count,
+                credential_id=(credential.credential_id if credential else ""),
+            ):
+                response = await self.__llm.analyze(
+                    prompt=prompt, effort=effort, tools=tools,
+                )
+        finally:
+            if credential is not None:
+                try:
+                    self._vault.revoke_credential(credential.credential_id)
+                except Exception as exc:  # pragma: no cover — defensive
+                    logger.warning(
+                        f"Vault failed to revoke LLM credential "
+                        f"{credential.credential_id}: {exc}"
+                    )
 
         input_tokens = response.get("input_tokens", 0)
         output_tokens = response.get("output_tokens", 0)
