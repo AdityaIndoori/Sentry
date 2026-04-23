@@ -199,7 +199,8 @@ feature in P1–P3 adds rows here.
 
 ---
 
-## Test Scoreboard (as of P4.1 + P4.2 + P4.3 + P4.4 + P4.5 + P4.6 + P4.7a)
+## Test Scoreboard (as of P4.1 + P4.2 + P4.3 + P4.4 + P4.5 + P4.6 + P4.7a + P4.7b)
+
 
 
 Last full run command:
@@ -229,8 +230,26 @@ Combined unit + E2E: **718 passed / 9 skipped / 1 xfailed / 0 failed**.
 | **P4.5 (mypy strict-island expansion + ruff fail-on-error)** | **706 passed / 9 skipped / 1 xfailed / 0 failed** (no new tests — pure lint/type tightening) |
 | **P4.6 (REST /api/tokens admin endpoints)** | **718 passed / 9 skipped / 1 xfailed / 0 failed** (+12) |
 | **P4.7a (retire backend.watcher mypy override)** | **718 passed / 9 skipped / 1 xfailed / 0 failed** (no new tests — type-system tightening) |
+| **P4.7b (retire backend.services + backend.mcp_tools mypy overrides)** | **718 passed / 9 skipped / 1 xfailed / 0 failed** (no new tests — type-system tightening) |
+
+### P4.7b delta (retire ``backend.services.*`` + ``backend.mcp_tools.*`` overrides)
+
+* **Strict-islands expanded 14 → 16 modules.** Added
+  ``backend.services.models`` and ``backend.services.registry`` —
+  both already strict-mode clean, verified via ``mypy --strict``.
+* **Deleted the empty ``backend/mcp_tools/`` directory** (only a
+  ``__pycache__`` leftover from a historical refactor). The
+  ``[[tool.mypy.overrides]] module = "backend.mcp_tools.*"`` block
+  was a zero-content no-op.
+* **Override-block count: 8 → 6** remaining
+  (``agents``, ``tools``, ``orchestrator``, ``api.app``,
+  ``shared-legacy``, plus the two ``ignore_errors`` blocks for
+  ``migrations`` / ``tests``).
+* **Zero behaviour changes** — 718/9/1/0 test count unchanged, ruff
+  clean. Backend-wide mypy soft-fail baseline holds at 49 lines.
 
 ### P4.7a delta (retire ``backend.watcher.*`` mypy override)
+
 
 * **Strict-islands expanded 11 → 14 modules.** Added
   ``backend.watcher.log_watcher``, ``backend.shared.interfaces``, and

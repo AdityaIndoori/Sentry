@@ -150,20 +150,15 @@ disallow_incomplete_defs = false
 disallow_any_generics = false
 warn_return_any = false
 
-[[tool.mypy.overrides]]
-module = "backend.mcp_tools.*"
-disallow_untyped_defs = false
-disallow_incomplete_defs = false
-disallow_any_generics = false
-warn_return_any = false
+# P4.7b: retired ``backend.mcp_tools.*`` override — the package is an
+# empty shim (only ``__pycache__`` leftover from a historical move)
+# so there's nothing left to check. The override block was a
+# zero-content no-op. Kept the comment for provenance.
+#
+# P4.7b: retired ``backend.services.*`` override — ``models.py`` and
+# ``registry.py`` are both strict-mode clean (verified with
+# ``mypy --strict``). Promoted to the strict-islands list below.
 
-
-[[tool.mypy.overrides]]
-module = "backend.services.*"
-disallow_untyped_defs = false
-disallow_incomplete_defs = false
-disallow_any_generics = false
-warn_return_any = false
 
 [[tool.mypy.overrides]]
 # ``backend.shared`` contains both strict-clean modules (observability,
@@ -201,7 +196,13 @@ module = [
   # concrete ``LogWatcher`` + the ``ILogWatcher`` port are both fully
   # annotated and strict-mode clean.
   "backend.watcher.log_watcher",
+  # P4.7b: retired the ``backend.services.*`` override block — both
+  # ``services.models`` and ``services.registry`` are strict-mode
+  # clean (verified via ``mypy --strict``).
+  "backend.services.models",
+  "backend.services.registry",
 ]
+
 
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
