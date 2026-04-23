@@ -95,12 +95,23 @@ def upgrade() -> None:
     op.create_index("ix_audit_log_agent_id", "audit_log", ["agent_id"])
     op.create_index("ix_audit_log_action", "audit_log", ["action"])
 
-    # ── audit_log immutability trigger (Postgres only) ─────────────
+    # ── audit_log immutability trigger (SEC-30) ─────────────────────
     #
     # The application layer already refuses to issue UPDATE or DELETE
     # against audit_log, but we add a DB-level trigger as a second line
-    # of defense for Postgres deployments. SQLite doesn't support raise-
-    # from-trigger cleanly, so we skip there (SEC-30 is Postgres-only).
+    # of defense so a rogue operator with direct database access still
+    # cannot rewrite forensic history without leaving a clear paper
+    # trail.
+    #
+    # * Postgres path:   RAISE EXCEPTION inside a PL/pgSQL function
+    #                    bound to a BEFORE UPDATE OR DELETE trigger.
+    # * SQLite path:     two BEFORE UPDATE / BEFORE DELETE triggers
+    #                    that call RAISE(ABORT, ...), which aborts
+    #                    the statement and propagates as an
+    #                    sqlite3.IntegrityError to the Python layer.
+    #                    This gives dev / test / staging SQLite
+    #                    deployments the same defense-in-depth as
+    #                    production Postgres.
     bind = op.get_bind()
     if bind.dialect.name == "postgresql":
         op.execute(
@@ -123,6 +134,26 @@ def upgrade() -> None:
             FOR EACH ROW EXECUTE FUNCTION sentry_audit_log_immutable();
             """
         )
+    elif bind.dialect.name == "sqlite":
+        op.execute(
+            """
+            CREATE TRIGGER sentry_audit_log_no_update
+            BEFORE UPDATE ON audit_log
+            BEGIN
+                SELECT RAISE(ABORT, 'audit_log is append-only: UPDATE rejected');
+            END;
+            """
+        )
+        op.execute(
+            """
+            CREATE TRIGGER sentry_audit_log_no_delete
+            BEFORE DELETE ON audit_log
+            BEGIN
+                SELECT RAISE(ABORT, 'audit_log is append-only: DELETE rejected');
+            END;
+            """
+        )
+
 
     # ── api_tokens (P2.1 uses this) ────────────────────────────────
     op.create_table(

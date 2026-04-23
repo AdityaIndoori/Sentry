@@ -174,12 +174,23 @@ class TestPostgresAuditLog:
         log.log_action("agent-1", "b", "d2", "r2")
         assert log.verify_integrity() is True
 
-        # Tamper: UPDATE the detail of the first row directly in the DB.
-        # (In real Postgres a trigger would block this; SQLite has no such
-        # trigger — which is why we enforce via the sync repo API too.)
-        from sqlalchemy import update
+        # SEC-30 regression guard: BOTH SQLite and Postgres now carry
+        # BEFORE-UPDATE / BEFORE-DELETE triggers that block raw mutation
+        # of ``audit_log``. To still exercise the application-level
+        # ``verify_integrity()`` tamper-detection logic we have to drop
+        # those triggers here (the attack we're modelling is an operator
+        # with DB superuser / DROP TRIGGER privileges).
+        from sqlalchemy import text, update
 
         from backend.persistence.models import AuditLogRow
+        async with db.sessionmaker() as session:
+            # SQLite trigger names; the PG path would drop
+            # ``sentry_audit_log_no_update`` off the single combined
+            # trigger, but this test runs on SQLite only.
+            await session.execute(text("DROP TRIGGER IF EXISTS sentry_audit_log_no_update"))
+            await session.execute(text("DROP TRIGGER IF EXISTS sentry_audit_log_no_delete"))
+            await session.commit()
+
         async with db.sessionmaker() as session:
             await session.execute(
                 update(AuditLogRow)
@@ -189,6 +200,7 @@ class TestPostgresAuditLog:
             await session.commit()
 
         assert log.verify_integrity() is False
+
 
     @pytest.mark.asyncio
     async def test_read_all_returns_ordered_entries(self, db):

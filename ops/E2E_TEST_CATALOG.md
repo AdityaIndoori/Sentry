@@ -199,7 +199,7 @@ feature in P1–P3 adds rows here.
 
 ---
 
-## Test Scoreboard (as of P4.1 + P4.2 + P4.3 + P4.4 + P4.5 + P4.6 + P4.7a + P4.7b)
+## Test Scoreboard (as of P4.1 + P4.2 + P4.3 + P4.4 + P4.5 + P4.6 + P4.7a + P4.7b + P4.8)
 
 
 
@@ -209,7 +209,8 @@ Last full run command:
 cmd /v:on /c "set SENTRY_E2E=1&& python -m pytest backend/tests/ --no-cov -q -W ignore::DeprecationWarning"
 ```
 
-Combined unit + E2E: **718 passed / 9 skipped / 1 xfailed / 0 failed**.
+Combined unit + E2E: **724 passed / 11 skipped / 1 xfailed / 0 failed**.
+
 
 ### Scoreboard history
 
@@ -231,8 +232,49 @@ Combined unit + E2E: **718 passed / 9 skipped / 1 xfailed / 0 failed**.
 | **P4.6 (REST /api/tokens admin endpoints)** | **718 passed / 9 skipped / 1 xfailed / 0 failed** (+12) |
 | **P4.7a (retire backend.watcher mypy override)** | **718 passed / 9 skipped / 1 xfailed / 0 failed** (no new tests — type-system tightening) |
 | **P4.7b (retire backend.services + backend.mcp_tools mypy overrides)** | **718 passed / 9 skipped / 1 xfailed / 0 failed** (no new tests — type-system tightening) |
+| **P4.8 (SEC-30: audit_log DB append-only triggers)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (+6 unit, +2 Postgres-gated skips) |
+
+### P4.8 delta (SEC-30 — audit_log append-only triggers)
+
+* **Dialect-aware DB-level triggers** installed on every fresh
+  ``audit_log`` table via a ``DDL.execute_if(...)`` event listener in
+  ``backend/persistence/models.py``. This keeps the ``create_all``
+  path (used by tests) and the Alembic migration path in lockstep —
+  an operator who bootstraps via either one gets the same defense.
+  * **Postgres**: ``sentry_audit_log_immutable()`` PL/pgSQL function
+    + ``BEFORE UPDATE OR DELETE`` trigger that ``RAISE EXCEPTION``-s
+    with SQLSTATE ``42000``.
+  * **SQLite**: two ``CREATE TRIGGER ... RAISE(ABORT, ...)`` statements
+    (``sentry_audit_log_no_update``, ``sentry_audit_log_no_delete``)
+    so dev / staging SQLite deployments get the same defense as prod
+    Postgres.
+* **Alembic migration updated** (``20260422_0001_initial_schema.py``)
+  — gained the same ``sqlite`` branch so that ``alembic upgrade head``
+  against a fresh SQLite DB also installs the triggers.
+* **6 new SEC-30 tests** in ``backend/tests/test_audit_log_immutability.py``:
+  * ``test_trigger_exists_on_sqlite`` — triggers created by
+    ``create_all`` are discoverable via ``sqlite_master``.
+  * ``test_update_is_rejected`` — raw ``UPDATE`` attempt raises
+    ``sqlite3.IntegrityError`` with the expected message.
+  * ``test_delete_is_rejected`` — raw ``DELETE`` likewise rejected.
+  * ``test_insert_still_works`` — positive control: the only allowed
+    mutation continues to function.
+  * ``test_rows_survive_tamper_attempt`` — after the trigger fires,
+    the row's ``detail`` column is *unchanged*.
+  * ``test_migration_trigger_names_match_create_all`` — string-parse
+    the migration file to catch drift between the two install paths.
+* **2 Postgres-gated tests** (``test_postgres_update_rejected`` /
+  ``_delete_rejected``) — skipped by default, activated when
+  ``SENTRY_TEST_PG_URL`` is set (CI with a Postgres service runs
+  these end-to-end).
+* **Existing ``test_verify_integrity_detects_tamper``** in
+  ``test_persistence.py`` updated to ``DROP TRIGGER`` first (model:
+  "attacker has superuser / DROP TRIGGER privileges") so the
+  application-level ``verify_integrity()`` tamper-detection logic
+  remains exercised.
 
 ### P4.7b delta (retire ``backend.services.*`` + ``backend.mcp_tools.*`` overrides)
+
 
 * **Strict-islands expanded 14 → 16 modules.** Added
   ``backend.services.models`` and ``backend.services.registry`` —

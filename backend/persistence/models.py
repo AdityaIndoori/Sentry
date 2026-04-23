@@ -27,7 +27,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Index, Integer, String, Text
+from sqlalchemy import DDL, JSON, DateTime, Index, Integer, String, Text, event
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -171,6 +171,88 @@ class ApiTokenRow(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+# ────────────────────────────────────────────────────────────────────
+# SEC-30 — audit_log append-only triggers (defense-in-depth).
+#
+# These DDL event listeners fire right after the ``audit_log`` table is
+# created so that ``metadata.create_all()`` and Alembic share the same
+# trigger surface. The application layer already refuses to issue
+# UPDATE / DELETE against ``audit_log`` (see
+# ``backend/persistence/repositories/audit_repo.py``); the DB-level
+# triggers are a second line of defense against a rogue operator with
+# direct DB access.
+#
+# We generate dialect-specific DDL via the ``DDL.execute_if`` guard:
+# Postgres gets a PL/pgSQL function + BEFORE UPDATE OR DELETE trigger;
+# SQLite gets two BEFORE UPDATE / BEFORE DELETE triggers that use
+# ``RAISE(ABORT, ...)``. Other dialects (e.g. MSSQL, MySQL) silently
+# skip — they currently aren't supported by Sentry.
+# ────────────────────────────────────────────────────────────────────
+
+_PG_AUDIT_TRIGGER_FN = DDL(
+    """
+    CREATE OR REPLACE FUNCTION sentry_audit_log_immutable()
+    RETURNS TRIGGER AS $$
+    BEGIN
+        RAISE EXCEPTION 'audit_log is append-only: % rejected', TG_OP
+            USING ERRCODE = '42000';
+    END;
+    $$ LANGUAGE plpgsql;
+    """
+)
+
+_PG_AUDIT_TRIGGER = DDL(
+    """
+    DROP TRIGGER IF EXISTS sentry_audit_log_no_update ON audit_log;
+    CREATE TRIGGER sentry_audit_log_no_update
+    BEFORE UPDATE OR DELETE ON audit_log
+    FOR EACH ROW EXECUTE FUNCTION sentry_audit_log_immutable();
+    """
+)
+
+_SQLITE_AUDIT_NO_UPDATE = DDL(
+    """
+    CREATE TRIGGER IF NOT EXISTS sentry_audit_log_no_update
+    BEFORE UPDATE ON audit_log
+    BEGIN
+        SELECT RAISE(ABORT, 'audit_log is append-only: UPDATE rejected');
+    END;
+    """
+)
+
+_SQLITE_AUDIT_NO_DELETE = DDL(
+    """
+    CREATE TRIGGER IF NOT EXISTS sentry_audit_log_no_delete
+    BEFORE DELETE ON audit_log
+    BEGIN
+        SELECT RAISE(ABORT, 'audit_log is append-only: DELETE rejected');
+    END;
+    """
+)
+
+
+event.listen(
+    AuditLogRow.__table__,
+    "after_create",
+    _PG_AUDIT_TRIGGER_FN.execute_if(dialect="postgresql"),
+)
+event.listen(
+    AuditLogRow.__table__,
+    "after_create",
+    _PG_AUDIT_TRIGGER.execute_if(dialect="postgresql"),
+)
+event.listen(
+    AuditLogRow.__table__,
+    "after_create",
+    _SQLITE_AUDIT_NO_UPDATE.execute_if(dialect="sqlite"),
+)
+event.listen(
+    AuditLogRow.__table__,
+    "after_create",
+    _SQLITE_AUDIT_NO_DELETE.execute_if(dialect="sqlite"),
+)
+
+
 __all__ = [
     "ApiTokenRow",
     "AuditLogRow",
@@ -179,3 +261,5 @@ __all__ = [
     "MemoryEntryRow",
     "MemoryStateRow",
 ]
+
+
