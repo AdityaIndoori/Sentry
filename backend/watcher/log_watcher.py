@@ -20,6 +20,7 @@ import os
 import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from typing import Any
 
 from backend.shared.config import WatcherConfig
 from backend.shared.interfaces import ILogWatcher
@@ -45,11 +46,12 @@ class LogWatcher(ILogWatcher):
         # next read to avoid UnicodeDecodeError at chunk boundaries.
         self._file_state: dict[str, tuple[int, int, bytes]] = {}
         self._event_queue: asyncio.Queue[LogEvent] = asyncio.Queue(maxsize=100)
-        self._poll_task: asyncio.Task | None = None
+        self._poll_task: asyncio.Task[Any] | None = None
 
     # ── lifecycle ────────────────────────────────────────────────────────
 
-    async def start(self) -> asyncio.Task | None:
+    async def start(self) -> asyncio.Task[Any] | None:
+
         """Start the polling loop. Returns the task handle so the caller
         can cancel it cleanly on shutdown.
         """

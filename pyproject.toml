@@ -151,18 +151,12 @@ disallow_any_generics = false
 warn_return_any = false
 
 [[tool.mypy.overrides]]
-module = "backend.watcher.*"
-disallow_untyped_defs = false
-disallow_incomplete_defs = false
-disallow_any_generics = false
-warn_return_any = false
-
-[[tool.mypy.overrides]]
 module = "backend.mcp_tools.*"
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
 disallow_any_generics = false
 warn_return_any = false
+
 
 [[tool.mypy.overrides]]
 module = "backend.services.*"
@@ -198,11 +192,17 @@ module = [
   "backend.shared.principal",
   "backend.shared.circuit_breaker",
   "backend.shared.settings",
+  "backend.shared.interfaces",
   "backend.api.auth",
   "backend.api.broadcaster",
   "backend.persistence.session",
   "backend.persistence.repositories.token_repo",
+  # P4.7a: retired the ``backend.watcher.*`` override block — the
+  # concrete ``LogWatcher`` + the ``ILogWatcher`` port are both fully
+  # annotated and strict-mode clean.
+  "backend.watcher.log_watcher",
 ]
+
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 disallow_any_generics = true

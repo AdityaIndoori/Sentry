@@ -199,7 +199,8 @@ feature in P1–P3 adds rows here.
 
 ---
 
-## Test Scoreboard (as of P4.1 + P4.2 + P4.3 + P4.4 + P4.5 + P4.6)
+## Test Scoreboard (as of P4.1 + P4.2 + P4.3 + P4.4 + P4.5 + P4.6 + P4.7a)
+
 
 Last full run command:
 
@@ -227,8 +228,43 @@ Combined unit + E2E: **718 passed / 9 skipped / 1 xfailed / 0 failed**.
 | **P4.4 (OpenAPI snapshot)** | **706 passed / 9 skipped / 1 xfailed / 0 failed** (+2) |
 | **P4.5 (mypy strict-island expansion + ruff fail-on-error)** | **706 passed / 9 skipped / 1 xfailed / 0 failed** (no new tests — pure lint/type tightening) |
 | **P4.6 (REST /api/tokens admin endpoints)** | **718 passed / 9 skipped / 1 xfailed / 0 failed** (+12) |
+| **P4.7a (retire backend.watcher mypy override)** | **718 passed / 9 skipped / 1 xfailed / 0 failed** (no new tests — type-system tightening) |
+
+### P4.7a delta (retire ``backend.watcher.*`` mypy override)
+
+* **Strict-islands expanded 11 → 14 modules.** Added
+  ``backend.watcher.log_watcher``, ``backend.shared.interfaces``, and
+  pulled every ``Optional["Task[Any]"]`` / ``list[_JSON]`` /
+  ``_JSON`` annotation through so every caller sees the correct
+  generic parameters.
+* **``ILogWatcher`` port fixed** —
+  * ``start()`` now declares ``-> Optional["Task[Any]"]`` so the
+    concrete implementation's "return the background poll task so
+    the caller owns its lifecycle" contract survives a strict
+    ``[override]`` check.
+  * ``events()`` is now a *regular* ``def`` returning
+    ``AsyncIterator[LogEvent]`` — the previous ``async def events()
+    -> AsyncIterator[LogEvent]`` signature made it a coroutine
+    returning an iterator, which mypy's ``--strict`` correctly
+    flagged as incompatible with the concrete async-generator
+    implementation. All call sites use ``async for event in
+    watcher.events():`` which is identical under both signatures.
+* **``ILLMClient`` / ``IToolExecutor`` / ``IOrchestrator`` gained
+  parameterised generics** — ``list[_JSON]`` / ``_JSON`` alias
+  (where ``_JSON = dict[str, Any]``) replaces the bare ``list`` /
+  ``dict`` that strict mode rejects. No behavioural change; every
+  existing implementer already returned ``dict[str, Any]``.
+* **``backend.watcher.log_watcher``** — ``self._poll_task`` and the
+  ``start()`` return are now fully parameterised
+  (``asyncio.Task[Any] | None``).
+* **CI baseline regressed 53 → 49 lines in the soft-fail mypy
+  sweep** — net *minus-four* errors now that watcher + interfaces
+  are clean.
+* **Zero behaviour changes** — 718/9/1/0, ruff clean after one
+  trailing ``I001`` auto-fix.
 
 ### P4.6 delta
+
 
 * Three new admin-gated routes on ``backend/api/app.py``:
   * ``POST   /api/tokens``        — mint a token; raw value returned **exactly once**.

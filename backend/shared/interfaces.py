@@ -4,7 +4,9 @@ Following Dependency Inversion Principle - depend on abstractions, not concretio
 """
 
 from abc import ABC, abstractmethod
+from asyncio import Task
 from collections.abc import AsyncIterator
+from typing import Any, Optional
 
 from .models import (
     Incident,
@@ -14,21 +16,41 @@ from .models import (
     ToolResult,
 )
 
+# Alias for heterogeneous LLM/tool payloads that still cross ABI boundaries
+# as untyped JSON-ish structures. Concrete implementations (``backend.api``,
+# ``backend.tools``) use Pydantic models internally; the ABCs here keep the
+# signature broad until the downstream callers are migrated.
+_JSON = dict[str, Any]
+
+
 
 class ILogWatcher(ABC):
     """Interface for log file monitoring."""
 
     @abstractmethod
-    async def start(self) -> None:
-        """Start watching log files."""
+    async def start(self) -> Optional["Task[Any]"]:
+        """Start watching log files.
+
+        Returns the background poll task so the caller owns its
+        lifecycle (and can cancel it cleanly on shutdown). Implementations
+        that do not run a background task may return ``None``.
+        """
 
     @abstractmethod
     async def stop(self) -> None:
         """Stop watching log files."""
 
+    # NOTE: ``events`` is declared WITHOUT ``async`` because it is an
+    # *async generator* — calling it returns an ``AsyncIterator``
+    # directly, it is not a coroutine that must be awaited. This matches
+    # the ``async for event in watcher.events():`` idiom used at every
+    # call site. See mypy docs:
+    # https://mypy.readthedocs.io/en/stable/more_types.html#asynchronous-iterators
     @abstractmethod
-    async def events(self) -> AsyncIterator[LogEvent]:
+    def events(self) -> AsyncIterator[LogEvent]:
         """Yield log events as they are detected."""
+        ...
+
 
 
 class ILLMClient(ABC):
@@ -39,12 +61,12 @@ class ILLMClient(ABC):
         self,
         prompt: str,
         effort: str = "low",
-        tools: list | None = None,
-    ) -> dict:
+        tools: list[_JSON] | None = None,
+    ) -> _JSON:
         """Send analysis request to LLM and return response."""
 
     @abstractmethod
-    async def get_usage(self) -> dict:
+    async def get_usage(self) -> _JSON:
         """Return current token usage statistics."""
 
 
@@ -56,23 +78,24 @@ class IToolExecutor(ABC):
         """Execute a tool call and return the result."""
 
     @abstractmethod
-    def get_tool_definitions(self) -> list:
+    def get_tool_definitions(self) -> list[_JSON]:
         """Return all tool definitions for LLM context."""
 
     @abstractmethod
-    def get_read_only_tool_definitions(self) -> list:
+    def get_read_only_tool_definitions(self) -> list[_JSON]:
         """Return only read-only tool definitions (no apply_patch, restart_service).
 
         Used by the Diagnosis agent which must investigate but never modify.
         """
 
     @abstractmethod
-    def get_remediation_tool_definitions(self) -> list:
+    def get_remediation_tool_definitions(self) -> list[_JSON]:
         """Return tools for the Remediation agent: read_file + active tools.
 
         Excludes grep_search, fetch_docs, run_diagnostics to prevent the LLM
         from wasting tool loops on investigation instead of applying fixes.
         """
+
 
 
 class IMemoryStore(ABC):
@@ -123,5 +146,7 @@ class IOrchestrator(ABC):
         """Return all currently active incidents."""
 
     @abstractmethod
-    async def get_status(self) -> dict:
+    async def get_status(self) -> _JSON:
         """Return current orchestrator status."""
+
+
