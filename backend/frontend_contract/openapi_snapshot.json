@@ -1,0 +1,197 @@
+{
+  "components": {
+    "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "TriggerEventRequest": {
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "source": {
+            "default": "manual",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "msg": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "paths": {
+    "/api/config": {
+      "get": {
+        "parameters": [],
+        "request_body_required": false,
+        "response_codes": [
+          "200"
+        ]
+      }
+    },
+    "/api/health": {
+      "get": {
+        "parameters": [],
+        "request_body_required": false,
+        "response_codes": [
+          "200"
+        ]
+      }
+    },
+    "/api/incidents": {
+      "get": {
+        "parameters": [],
+        "request_body_required": false,
+        "response_codes": [
+          "200"
+        ]
+      }
+    },
+    "/api/incidents/{incident_id}": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true
+          }
+        ],
+        "request_body_required": false,
+        "response_codes": [
+          "200",
+          "422"
+        ]
+      }
+    },
+    "/api/memory": {
+      "get": {
+        "parameters": [],
+        "request_body_required": false,
+        "response_codes": [
+          "200"
+        ]
+      }
+    },
+    "/api/ready": {
+      "get": {
+        "parameters": [],
+        "request_body_required": false,
+        "response_codes": [
+          "200"
+        ]
+      }
+    },
+    "/api/security": {
+      "get": {
+        "parameters": [],
+        "request_body_required": false,
+        "response_codes": [
+          "200"
+        ]
+      }
+    },
+    "/api/status": {
+      "get": {
+        "parameters": [],
+        "request_body_required": false,
+        "response_codes": [
+          "200"
+        ]
+      }
+    },
+    "/api/stream/incidents": {
+      "get": {
+        "parameters": [],
+        "request_body_required": false,
+        "response_codes": [
+          "200"
+        ]
+      }
+    },
+    "/api/tools": {
+      "get": {
+        "parameters": [],
+        "request_body_required": false,
+        "response_codes": [
+          "200"
+        ]
+      }
+    },
+    "/api/trigger": {
+      "post": {
+        "parameters": [],
+        "request_body_required": true,
+        "response_codes": [
+          "200",
+          "422"
+        ]
+      }
+    },
+    "/api/watcher/start": {
+      "post": {
+        "parameters": [],
+        "request_body_required": false,
+        "response_codes": [
+          "200"
+        ]
+      }
+    },
+    "/api/watcher/stop": {
+      "post": {
+        "parameters": [],
+        "request_body_required": false,
+        "response_codes": [
+          "200"
+        ]
+      }
+    },
+    "/metrics": {
+      "get": {
+        "parameters": [],
+        "request_body_required": false,
+        "response_codes": [
+          "200"
+        ]
+      }
+    }
+  }
+}
