@@ -199,15 +199,100 @@ feature in P1–P3 adds rows here.
 
 ---
 
-## Test Scoreboard (as of P2.4 completion)
+## Test Scoreboard (as of P3.4b + P2.3b-full + P3.1-full + P3.4c)
 
 Last full run command:
 
 ```cmd
-cmd /v:on /c "set SENTRY_E2E=1&& python -m pytest backend/tests/ --no-cov -q"
+cmd /v:on /c "set SENTRY_E2E=1&& python -m pytest backend/tests/ --no-cov -q -W ignore::DeprecationWarning"
 ```
 
-Combined unit + E2E: **684 passed / 7 skipped / 1 xfailed / 0 failed**.
+Combined unit + E2E: **685 passed / 9 skipped / 1 xfailed / 0 failed**.
+
+### Scoreboard history
+
+| Phase | Result |
+|-------|--------|
+| P2.4 completion | 684 passed / 7 skipped / 1 xfailed / 0 failed |
+| P2.3b (metrics) | 687 passed / 7 skipped / 1 xfailed / 0 failed |
+| P3.1 (frontend SSE/ErrorBoundary/CSP) | 687 passed / 7 skipped / 1 xfailed / 0 failed |
+| P3.4 (pyproject consolidation) | 687 passed / 7 skipped / 1 xfailed / 0 failed |
+| **P3.4b (JSONMemoryStore removal)** | **685 passed / 9 skipped / 1 xfailed / 0 failed** (−2 retired atomic-write tests; subsumed by SQLAlchemy transactions) |
+| P2.3b-full (OTel + Prometheus/Grafana) | 685 passed / 9 skipped / 1 xfailed / 0 failed |
+| P3.1-full (App.jsx split + vitest) | 685 passed / 9 skipped / 1 xfailed / 0 failed |
+| **P3.4c (mypy `--strict` scaffolding)** | **685 passed / 9 skipped / 1 xfailed / 0 failed** |
+
+### P3.4b delta
+
+* Deleted ``backend/memory/store.py`` (``JSONMemoryStore``) and the whole
+  ``backend/memory/`` package. ``build_container`` now always produces a
+  ``PostgresMemoryRepo`` — when ``DATABASE_URL`` is empty we synthesise
+  ``sqlite+aiosqlite:///<data_dir>/sentry.db`` and run
+  ``database.create_all()`` + ``engine.dispose()`` in a worker thread so the
+  connection pool isn't pinned to the bootstrap loop.
+* Orchestrator dedup: in-memory ``_recent_fingerprints`` map is now
+  consulted (and recorded) under ``_dedup_lock`` **before** the repo
+  check, which collapses 50 concurrent identical events to a single
+  incident without needing DB-level serialization.
+* Retired 2 atomic-write P0 regression tests
+  (``test_no_tmp_file_left_after_normal_write`` and
+  ``test_crash_mid_write_leaves_original_intact``): their tmp-file +
+  ``fsync`` + ``os.replace`` invariant is subsumed by SQLAlchemy's
+  transactional writes.
+
+### P2.3b-full delta
+
+* New ``backend/shared/observability.py`` — ``Telemetry`` wrapper around the
+  OpenTelemetry SDK with a no-op fallback when ``opentelemetry-*`` isn't
+  installed. ``init_telemetry(settings, app=)`` wires up an OTLP/gRPC
+  exporter + FastAPI / httpx / asyncpg auto-instrumentation when
+  ``settings.otel_exporter_otlp_endpoint`` is set. Idempotent.
+* New ``backend/shared/logging_config.py`` — structlog JSON pipeline (stdlib
+  ``_JSONFormatter`` fallback). Both paths inject ``trace_id`` / ``span_id``
+  from the current OTel context.
+* Orchestrator ``handle_event`` + ``BaseAgent._call_llm`` / ``_call_tool`` now
+  open telemetry spans. Metric wiring extended to tool / LLM / watcher /
+  cost counters.
+* ``docker-compose.yml`` adds ``prometheus`` / ``grafana`` / ``otel-collector``
+  services behind the ``observability`` profile, plus provisioning dirs
+  (``prometheus/prometheus.yml``,
+  ``grafana/provisioning/{datasources,dashboards}/``, sample dashboard at
+  ``grafana/provisioning/dashboards/sentry.json``, collector config at
+  ``docker/otel-collector-config.yaml``).
+
+### P3.1-full delta
+
+* ``frontend/src/App.jsx`` shrunk from 1,061 → ~100 lines — now owns data
+  hooks + composition only.
+* New component tree: ``Layout`` / ``Header`` / ``StatusCards`` /
+  ``ConfigPanel`` / ``WatcherControls`` / ``TriggerForm`` /
+  ``SecurityPanel`` / ``IncidentList`` / ``IncidentDetail`` /
+  ``MemoryPanel`` / ``ToolsPanel``. Shared primitives in
+  ``frontend/src/components/ui.jsx`` and tokens in ``frontend/src/theme.js``.
+* SSE event ``last`` field triggers ``refreshStatus()`` +
+  ``refreshIncidents()`` via ``useEffect`` (polling intervals widened to
+  15 s / 30 s).
+* Vitest wired up — ``frontend/src/test/setup.js`` registers jest-dom,
+  two component tests added (``StatusCards.test.jsx``,
+  ``IncidentList.test.jsx``). Run with ``npm test`` (``vitest run``). CI
+  step ``npm test --if-present -- --run`` now executes these.
+
+### P3.4c delta
+
+* ``pyproject.toml`` ``[tool.mypy]`` now globally enables
+  ``disallow_untyped_defs = true``, ``disallow_any_generics = true``,
+  ``disallow_incomplete_defs = true``, ``warn_return_any = true``.
+* Per-module ``[[tool.mypy.overrides]]`` blocks relax these flags for
+  packages still carrying an annotation backlog (``backend.agents.*``,
+  ``backend.tools.*``, ``backend.orchestrator.*``, ``backend.watcher.*``,
+  ``backend.mcp_tools.*``, ``backend.services.*``, ``backend.shared.*``
+  legacy, ``backend.api.app`` + routes).
+* "Strict islands" list locks strict mode in for modules already clean:
+  ``backend.shared.observability`` / ``logging_config`` / ``metrics`` /
+  ``secrets`` / ``principal`` / ``circuit_breaker``,
+  ``backend.api.auth`` / ``broadcaster``.
+* CI ``mypy`` step still runs with ``|| true`` and a TODO comment — the
+  flag is removed once every override block has been retired.
 
 P2.4 delta: **+11 net pass** (10 unit + 1 E2E) —
 

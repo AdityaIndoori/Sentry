@@ -490,13 +490,20 @@ Sequence changes to minimize merge conflicts, keep tests green at every step, an
      per-check booleans in the body. FN-02 E2E flipped from xfail to
      passing. `/api/health` stays open (no auth, no dep checks) for
      Kubernetes `livenessProbe`; `/api/ready` is the pool-drain probe.
-   - **P2.3b — DEFERRED** — `Telemetry` facade, OpenTelemetry SDK +
-     instrumentation, Prometheus `/metrics` endpoint with counters
+   - **P2.3b ✅ DONE** — Prometheus `/metrics` endpoint with counters
      (`incidents_total`, `llm_cost_usd_total`, `tool_calls_total`,
-     `watcher_events_total`, `circuit_breaker_trips_total`), structlog
-     JSON logs with trace-id correlation, Compose sidecars (Prometheus,
-     Grafana with provisioned dashboard, optional OTel Collector).
-   - **Exit criteria:** Grafana dashboard shows live incidents, costs, watcher events.
+     `watcher_events_total`, `circuit_breaker_trips_total`). Shipped
+     in ``backend/shared/metrics.py`` with no-op fallback when
+     ``prometheus-client`` isn't installed.
+   - **P2.3b-full ✅ DONE** — ``Telemetry`` facade + OpenTelemetry SDK
+     wired end-to-end, structlog JSON logs with trace-id correlation,
+     Compose sidecars (Prometheus, Grafana with provisioned dashboard,
+     OTel Collector). See ``backend/shared/observability.py``,
+     ``backend/shared/logging_config.py``, ``prometheus/``, ``grafana/``,
+     ``docker/otel-collector-config.yaml``.
+   - **Exit criteria met:** `docker compose --profile observability up`
+     renders the provisioned "Sentry — OSS Overview" Grafana dashboard
+     live from Prometheus.
 
 10. **P2.4 — SSE dashboard feed. [✓ DONE (backend); frontend hook deferred to P3.1]**
     - ✅ `backend/api/broadcaster.py::IncidentBroadcaster` — in-process
@@ -538,23 +545,72 @@ Sequence changes to minimize merge conflicts, keep tests green at every step, an
       1 E2E).
 
 11. **P3.1 — Frontend split + polish.**
-    - Break `App.jsx` into components; add `ErrorBoundary`; tighten `nginx.conf` CSP; migrate frontend to TypeScript (optional).
-    - Vitest coverage ≥ 80%.
+    - **P3.1 ✅ DONE** — Bearer-token `apiFetch` client
+      (``frontend/src/api/client.js``), SSE hook
+      (``frontend/src/hooks/useIncidentStream.js``), ``ErrorBoundary``,
+      tightened nginx CSP shipped in commit ``e9927f8``.
+    - **P3.1-full ✅ DONE** — ``frontend/src/App.jsx`` shrunk from
+      1,061 → ~100 lines. New component tree: ``Layout`` / ``Header`` /
+      ``StatusCards`` / ``ConfigPanel`` / ``WatcherControls`` /
+      ``TriggerForm`` / ``SecurityPanel`` / ``IncidentList`` /
+      ``IncidentDetail`` / ``MemoryPanel`` / ``ToolsPanel``. Shared
+      primitives in ``frontend/src/components/ui.jsx`` and tokens in
+      ``frontend/src/theme.js``. Vitest + ``@testing-library/react``
+      wired up with ``frontend/src/test/setup.js``; two component tests
+      (``StatusCards.test.jsx``, ``IncidentList.test.jsx``) shipped.
+      CI ``frontend`` job now runs ``npm test`` (``vitest run``).
+    - **Vitest coverage ≥ 80%** — deferred; current tests cover the two
+      most behaviorally-critical components. Expand coverage in a
+      follow-on once the component surface stabilises.
 
-12. **P3.2 — CI/CD.**
-    - `.github/workflows/ci.yml` (lint, mypy, pytest, vitest, Trivy, SBOM, image build).
-    - `release.yml` tag-driven publish to GHCR.
-    - Dependabot.
+12. **P3.2 — CI/CD. [✓ DONE]**
+    - ✅ `.github/workflows/ci.yml` — ruff (soft-fail), mypy (soft-fail
+      with the P3.4c progressive-tightening config), pytest with
+      coverage artifact upload, frontend build + vitest, Trivy
+      filesystem + image scans, CycloneDX SBOM.
+    - ✅ `release.yml` tag-driven publish to GHCR.
+    - ✅ `dependabot.yml` — weekly Python + npm + Docker updates.
 
-13. **P3.3 — Documentation & honesty pass.**
-    - Revise README Zero-Trust claims table to reflect actual enforcement.
-    - `ops/SECURITY.md` — threat model, current gaps, how to extend.
-    - `ops/RUNBOOK.md` — operator playbooks.
-    - `ops/ARCHITECTURE.md` — update for new topology.
+13. **P3.3 — Documentation & honesty pass. [✓ DONE]**
+    - ✅ README Zero-Trust claims table revised to reflect actual
+      enforcement.
+    - ✅ `ops/SECURITY.md` — threat model, current gaps, how to extend.
+    - ✅ `ops/RUNBOOK.md` — operator playbooks.
+    - ✅ `ops/ARCHITECTURE.md` — updated for new topology (Postgres +
+      Prometheus + Grafana + OTel Collector + OpenBao secrets).
 
 14. **P3.4 — Cleanup.**
-    - Delete `JSONMemoryStore` once Postgres has baked for two releases.
-    - Delete `memory/store.py` tests; remove dual-write flag.
-    - Final pass: `ruff check --fix`, `mypy --strict backend/`, update all doc references.
+    - **P3.4 ✅ DONE** — `pyproject.toml` consolidates ruff / mypy /
+      pytest / coverage config; legacy `pytest.ini` + `.coveragerc`
+      kept as thin shims. Commit ``6bcbab6``.
+    - **P3.4b ✅ DONE** — `JSONMemoryStore` deleted; entire
+      ``backend/memory/`` package removed. `build_container` now always
+      produces a ``PostgresMemoryRepo`` (synthesised SQLite when
+      ``DATABASE_URL`` empty). Dual-write flag removed. Orchestrator
+      dedup reordered so the in-memory ``_recent_fingerprints`` map is
+      consulted under lock BEFORE the repo, collapsing 50 concurrent
+      identical events to 1 incident. 2 retired atomic-write P0
+      regression tests; invariant subsumed by SQLAlchemy transactions.
+      Commit ``752302d``.
+    - **P3.4c ✅ DONE** — mypy ``--strict`` scaffolding. Globally
+      enables ``disallow_untyped_defs`` + ``disallow_any_generics`` +
+      ``disallow_incomplete_defs`` + ``warn_return_any``. Per-module
+      ``[[tool.mypy.overrides]]`` blocks relax these flags for packages
+      still carrying a backlog (``backend.agents.*``, ``backend.tools.*``,
+      ``backend.orchestrator.*``, ``backend.watcher.*``,
+      ``backend.mcp_tools.*``, ``backend.services.*``,
+      ``backend.shared.*`` legacy, ``backend.api.app`` + routes).
+      Strict-mode islands list the modules held to ``--strict`` today:
+      ``backend.shared.observability`` / ``logging_config`` / ``metrics``
+      / ``secrets`` / ``principal`` / ``circuit_breaker``,
+      ``backend.api.auth`` / ``broadcaster``. CI ``mypy`` step still
+      runs with ``|| true`` and a TODO — the flag is removed once every
+      override block has been retired. Commit ``c076ae6``.
+    - **Final ruff pass** — deferred; current overrides already
+      catch real regressions without gating PRs.
 
-Each phase ships independently behind feature flags where needed, leaves the 442-test suite green, and is individually reviewable in a single PR.
+Each phase ships independently behind feature flags where needed, leaves the backend test suite green, and is individually reviewable in a single PR.
+
+Scoreboard at end of P3.4c: **685 passed / 9 skipped / 1 xfailed / 0 failed**
+(full command: ``cmd /v:on /c "set SENTRY_E2E=1&& python -m pytest
+backend/tests/ --no-cov -q -W ignore::DeprecationWarning"``).
