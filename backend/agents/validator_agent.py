@@ -14,7 +14,7 @@ from typing import Any
 
 from backend.agents.base_agent import BaseAgent
 from backend.shared.ai_gateway import AIGateway
-from backend.shared.audit_log import ImmutableAuditLog
+from backend.shared.interfaces import IAuditLog
 from backend.shared.models import Incident
 from backend.shared.prompts import VERIFICATION_SYSTEM_PROMPT as VALIDATOR_SYSTEM_PROMPT
 from backend.shared.vault import AgentRole, IVault
@@ -33,7 +33,7 @@ class ValidatorAgent(BaseAgent):
         vault: IVault,
         llm: Any,
         gateway: AIGateway,
-        audit_log: ImmutableAuditLog | None = None,
+        audit_log: IAuditLog | None = None,
     ) -> None:
         super().__init__(vault, AgentRole.VALIDATOR, gateway, audit_log=audit_log, llm=llm)
 

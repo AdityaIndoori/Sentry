@@ -14,6 +14,7 @@ import logging
 import os
 from datetime import UTC, datetime
 from threading import Lock
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -50,14 +51,14 @@ class ImmutableAuditLog:
         detail: str,
         result: str,
         chain_of_thought: str = "",
-        metadata: dict | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """
         Append an immutable entry to the audit log.
         Returns the entry hash.
         """
         with self._lock:
-            entry = {
+            entry: dict[str, Any] = {
                 "timestamp": datetime.now(UTC).isoformat(),
                 "agent_id": agent_id,
                 "action": action,
@@ -80,12 +81,12 @@ class ImmutableAuditLog:
             self._last_hash = entry_hash
             return entry_hash
 
-    def read_all(self) -> list[dict]:
+    def read_all(self) -> list[dict[str, Any]]:
         """Read all audit log entries."""
         if not os.path.exists(self._log_path):
             return []
 
-        entries = []
+        entries: list[dict[str, Any]] = []
         with open(self._log_path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()

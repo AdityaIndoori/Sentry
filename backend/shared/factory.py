@@ -24,6 +24,7 @@ import logging
 from typing import Any
 
 from backend.shared.container import ServiceContainer
+from backend.shared.interfaces import IAuditLog
 from backend.shared.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -108,6 +109,14 @@ def build_container(
     # and the env-seeded admin token path is preserved.
     token_repo = TokenRepository(database)
 
+    # P4.9d: the audit_log local is widened to the structural ``IAuditLog``
+    # port so the two concrete backends (PostgresAuditLog when a DATABASE_URL
+    # is set, ImmutableAuditLog otherwise) can both flow into ToolExecutor /
+    # Orchestrator / BaseAgent subclasses — all of which now accept
+    # ``IAuditLog | None``. Without this annotation mypy infers the narrower
+    # ``PostgresAuditLog`` type from the first assignment and then rejects
+    # the ``ImmutableAuditLog`` branch.
+    audit_log: IAuditLog
     if settings.database_url:
         from backend.persistence.repositories.audit_repo import PostgresAuditLog
         audit_log = PostgresAuditLog(database)

@@ -199,7 +199,7 @@ feature in P1–P3 adds rows here.
 
 ---
 
-## Test Scoreboard (as of P4.1 + P4.2 + P4.3 + P4.4 + P4.5 + P4.6 + P4.7a + P4.7b + P4.8 + P4.9a + P4.9b + P4.9c)
+## Test Scoreboard (as of P4.1 + P4.2 + P4.3 + P4.4 + P4.5 + P4.6 + P4.7a + P4.7b + P4.8 + P4.9a + P4.9b + P4.9c + P4.9d)
 
 
 
@@ -236,6 +236,65 @@ Combined unit + E2E: **724 passed / 11 skipped / 1 xfailed / 0 failed**.
 | **P4.9a (close the P4.7c generics gap in agents + tools)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (no new tests — generics / annotation tightening) |
 | **P4.9b (persistence.repositories generics sweep + promote)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (no new tests — generics / annotation tightening) |
 | **P4.9c (retire backend.orchestrator.* override + promote)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (no new tests — type-system tightening) |
+| **P4.9d (IAuditLog Protocol — retire audit_log type split)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (no new tests — type-system tightening) |
+
+### P4.9d delta (``IAuditLog`` Protocol — retire the factory's audit_log type split)
+
+Fourth slice of the CI-hardening sweep. Three mypy errors clustered
+at the factory's dual-backend audit-log wiring point
+(``backend/shared/factory.py`` lines 119 / 159 / 189) are resolved by
+introducing a structural port, ``IAuditLog``, that both concrete
+backends (``ImmutableAuditLog`` JSONL + ``PostgresAuditLog``
+SQLAlchemy) already satisfy.
+
+**Fixes:**
+
+* ``backend/shared/interfaces.py``: declared
+  ``IAuditLog(Protocol)`` with ``@runtime_checkable``, capturing the
+  four public methods shared by both backends (``log_action``,
+  ``read_all``, ``verify_integrity``, ``get_entry_count``). Protocol
+  over ABC was chosen because nominal subtyping across the
+  ``backend.shared`` / ``backend.persistence`` boundary would require
+  an import cycle — structural typing is exactly the right tool for
+  "pick whichever backend the factory wired".
+* ``backend/shared/audit_log.py``: tightened
+  ``ImmutableAuditLog.log_action``'s ``metadata: dict | None``
+  (bare ``dict``) to ``dict[str, Any] | None``, and
+  ``read_all() -> list[dict]`` to ``list[dict[str, Any]]`` so the
+  concrete backend satisfies the strict-mode protocol without the
+  module itself needing to be promoted yet.
+* ``backend/shared/factory.py``: added an explicit
+  ``audit_log: IAuditLog`` annotation on the local variable before
+  the dual-backend ``if`` so mypy's inference doesn't narrow to the
+  first branch and reject the second. That single three-line
+  annotation closes all three factory errors.
+* Six consumers had their ``audit_log`` param widened from
+  ``ImmutableAuditLog | None`` → ``IAuditLog | None``:
+  ``backend/tools/executor.py::ToolExecutor.__init__``,
+  ``backend/orchestrator/engine.py::Orchestrator.__init__``,
+  ``backend/orchestrator/graph.py::IncidentGraphBuilder.__init__``,
+  ``backend/agents/base_agent.py::BaseAgent.__init__``, and each of
+  ``triage_agent.py`` / ``detective_agent.py`` / ``surgeon_agent.py``
+  / ``validator_agent.py``. Every one of these had been
+  ``from backend.shared.audit_log import ImmutableAuditLog``; that
+  import now comes from ``backend.shared.interfaces``.
+
+**pyproject.toml:** unchanged — the ``backend.shared.*`` relaxing
+override stays (its other legacy members — container, models,
+config, constants, prompts, security, vault, agent_throttle,
+ai_gateway, audit_log, settings — aren't all drained yet). Strict-
+islands count is unchanged at 35; the two concrete audit-log
+modules themselves were not promoted.
+
+**Verification:**
+
+* ``python -m mypy backend/ --ignore-missing-imports``:
+    **16 → 13 errors** (the three factory errors cleared; the
+    remaining 13 are the ``backend/api/app.py`` set, scheduled for
+    P4.9e).
+* ``python -m ruff check backend/`` → clean.
+* Full suite: **724 passed / 11 skipped / 1 xfailed / 0 failed**
+  (unchanged baseline, ~147s).
 
 ### P4.9c delta (retire ``backend.orchestrator.*`` override + strict-islands promote)
 

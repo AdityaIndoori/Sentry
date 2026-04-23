@@ -34,10 +34,15 @@ from backend.orchestrator.graph import IncidentGraphBuilder, IncidentGraphState
 from backend.services.registry import ServiceRegistry
 from backend.shared.agent_throttle import AgentThrottle
 from backend.shared.ai_gateway import AIGateway
-from backend.shared.audit_log import ImmutableAuditLog
 from backend.shared.circuit_breaker import CostCircuitBreaker
 from backend.shared.config import AppConfig
-from backend.shared.interfaces import ILLMClient, IMemoryStore, IOrchestrator, IToolExecutor
+from backend.shared.interfaces import (
+    IAuditLog,
+    ILLMClient,
+    IMemoryStore,
+    IOrchestrator,
+    IToolExecutor,
+)
 from backend.shared.metrics import inc_circuit_breaker_trip, inc_incident
 from backend.shared.models import (
     Incident,
@@ -76,7 +81,7 @@ class Orchestrator(IOrchestrator):
         tools: IToolExecutor,
         memory: IMemoryStore,
         circuit_breaker: CostCircuitBreaker,
-        audit_log: ImmutableAuditLog | None = None,
+        audit_log: IAuditLog | None = None,
         vault: IVault | None = None,
         gateway: AIGateway | None = None,
         throttle: AgentThrottle | None = None,

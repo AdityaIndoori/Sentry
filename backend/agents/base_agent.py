@@ -16,7 +16,7 @@ from abc import ABC
 from typing import Any, cast
 
 from backend.shared.ai_gateway import AIGateway
-from backend.shared.audit_log import ImmutableAuditLog
+from backend.shared.interfaces import IAuditLog
 from backend.shared.metrics import inc_llm_call, inc_tool_call, observe_llm_cost
 from backend.shared.models import ToolCall, ToolResult
 from backend.shared.observability import get_telemetry
@@ -41,7 +41,7 @@ class BaseAgent(ABC):
         vault: IVault,
         role: AgentRole,
         gateway: AIGateway,
-        audit_log: ImmutableAuditLog | None = None,
+        audit_log: IAuditLog | None = None,
         security: SecurityGuard | None = None,
         llm: Any = None,
         tools: Any = None,

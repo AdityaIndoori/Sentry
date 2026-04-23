@@ -21,10 +21,9 @@ from backend.agents.triage_agent import TriageAgent
 from backend.agents.validator_agent import ValidatorAgent
 from backend.shared.agent_throttle import AgentThrottle
 from backend.shared.ai_gateway import AIGateway
-from backend.shared.audit_log import ImmutableAuditLog
 from backend.shared.circuit_breaker import CostCircuitBreaker
 from backend.shared.config import AppConfig
-from backend.shared.interfaces import ILLMClient, IMemoryStore, IToolExecutor
+from backend.shared.interfaces import IAuditLog, ILLMClient, IMemoryStore, IToolExecutor
 from backend.shared.models import (
     ActivityType,
     Incident,
@@ -79,7 +78,7 @@ class IncidentGraphBuilder:
         circuit_breaker: CostCircuitBreaker,
         vault: IVault | None = None,
         gateway: AIGateway | None = None,
-        audit_log: ImmutableAuditLog | None = None,
+        audit_log: IAuditLog | None = None,
         throttle: AgentThrottle | None = None,
         registry: TrustedToolRegistry | None = None,
     ) -> None:

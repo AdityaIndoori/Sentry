@@ -6,7 +6,7 @@ Following Dependency Inversion Principle - depend on abstractions, not concretio
 from abc import ABC, abstractmethod
 from asyncio import Task
 from collections.abc import AsyncIterator
-from typing import Any, Optional
+from typing import Any, Optional, Protocol, runtime_checkable
 
 from .models import (
     Incident,
@@ -149,4 +149,47 @@ class IOrchestrator(ABC):
     async def get_status(self) -> _JSON:
         """Return current orchestrator status."""
 
+
+# ── P4.9d ──────────────────────────────────────────────────────────────
+#
+# Structural port for the hash-chained audit log. Both
+# :class:`backend.shared.audit_log.ImmutableAuditLog` (JSONL file
+# backend) and :class:`backend.persistence.repositories.audit_repo.PostgresAuditLog`
+# (SQLAlchemy backend) satisfy this shape. Declaring it as a ``Protocol``
+# (not an ``ABC``) avoids forcing either concrete class to inherit from
+# it — nominal subtyping isn't available across the persistence /
+# shared boundary without an import cycle, and structural typing is
+# exactly the right tool for "pick whichever backend the factory wired".
+#
+# The factory (``backend.shared.factory``) produces one of the two
+# concrete implementations based on whether ``settings.database_url``
+# is set, then hands it off to ``ToolExecutor`` / ``Orchestrator`` /
+# ``BaseAgent`` subclasses — all of which now accept ``IAuditLog |
+# None`` rather than naming the concrete ``ImmutableAuditLog`` type.
+#
+# ``@runtime_checkable`` lets tests use ``isinstance(x, IAuditLog)``
+# if they ever need it — the primary use is still static type-checking.
+@runtime_checkable
+class IAuditLog(Protocol):
+    """Structural port for the hash-chained audit log."""
+
+    def log_action(
+        self,
+        agent_id: str,
+        action: str,
+        detail: str,
+        result: str,
+        chain_of_thought: str = ...,
+        metadata: dict[str, Any] | None = ...,
+    ) -> str:
+        """Append an entry and return its hash."""
+
+    def read_all(self) -> list[dict[str, Any]]:
+        """Return every persisted entry (oldest first)."""
+
+    def verify_integrity(self) -> bool:
+        """Re-walk the hash chain; ``True`` iff no tampering detected."""
+
+    def get_entry_count(self) -> int:
+        """Return the number of persisted entries."""
 

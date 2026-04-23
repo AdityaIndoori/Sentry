@@ -14,10 +14,9 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from backend.shared.audit_log import ImmutableAuditLog
 from backend.shared.circuit_breaker import RateLimiter
 from backend.shared.config import SentryMode
-from backend.shared.interfaces import IToolExecutor
+from backend.shared.interfaces import IAuditLog, IToolExecutor
 from backend.shared.models import ToolCall, ToolCategory, ToolResult
 from backend.shared.security import SecurityGuard
 from backend.shared.tool_registry import TrustedToolRegistry
@@ -60,7 +59,7 @@ class ToolExecutor(IToolExecutor):
     """
 
     def __init__(self, security: SecurityGuard, project_root: str,
-                 audit_log: ImmutableAuditLog | None = None,
+                 audit_log: IAuditLog | None = None,
                  registry: TrustedToolRegistry | None = None,
                  vault: IVault | None = None):
         self._security = security
