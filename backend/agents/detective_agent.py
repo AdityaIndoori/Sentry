@@ -55,7 +55,8 @@ class DetectiveAgent(BaseAgent):
         self._activities = []
         self._call_count = 0
         cred = self._get_credential(scope="llm_call", ttl=120)
-        tool_results = []
+        tool_results: list[dict[str, Any]] = []
+
         total_input_tokens = 0
         total_output_tokens = 0
 
@@ -114,25 +115,26 @@ class DetectiveAgent(BaseAgent):
                         break
 
                     try:
-                        result = await self._call_tool(tool_name, tool_args)
-                        safe_output = self._scan_and_redact_output(result.output)
+                        tool_result = await self._call_tool(tool_name, tool_args)
+                        safe_output = self._scan_and_redact_output(tool_result.output)
                         self._audit(
                             "tool_executed",
                             f"tool={tool_name}, args={tool_args}",
-                            f"success={result.success}",
-                            metadata={"tool": tool_name, "success": result.success, "incident_id": incident.id},
+                            f"success={tool_result.success}",
+                            metadata={"tool": tool_name, "success": tool_result.success, "incident_id": incident.id},
                         )
                         tool_results.append({
                             "tool": tool_name,
                             "args": tool_args,
                             "output": safe_output[:2000],
-                            "success": result.success,
+                            "success": tool_result.success,
                         })
                         messages.append(
                             f"Tool result ({tool_name}): {safe_output[:2000]}"
                         )
                     except Exception as e:
                         messages.append(f"Tool error ({tool_name}): {e!s}")
+
 
                 # Cap total prompt size to prevent token explosion
                 full_text = "\n\n".join(messages)

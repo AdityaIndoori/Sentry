@@ -34,8 +34,9 @@ class TrustedToolRegistry:
     Unregistered tools are always blocked.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._tools: dict[str, ToolDefinition] = {}
+
 
     def register(
         self,

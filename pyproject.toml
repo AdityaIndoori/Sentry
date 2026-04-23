@@ -115,22 +115,15 @@ ignore_errors = true
 # Each block below relaxes ``--strict`` for a package that still
 # has a meaningful annotation backlog. Delete the block once the
 # package is fully annotated.
-[[tool.mypy.overrides]]
-module = "backend.agents.*"
-disallow_untyped_defs = false
-disallow_incomplete_defs = false
-disallow_any_generics = false
-warn_return_any = false
-
-[[tool.mypy.overrides]]
-module = "backend.tools.*"
-disallow_untyped_defs = false
-disallow_incomplete_defs = false
-disallow_any_generics = false
-warn_return_any = false
+# P4.7c: retired ``backend.agents.*`` override — all 5 modules pass
+# ``mypy --strict``. Promoted to strict-islands below.
+#
+# P4.7c: retired ``backend.tools.*`` override — all 7 modules pass
+# ``mypy --strict``. Promoted to strict-islands below.
 
 [[tool.mypy.overrides]]
 module = "backend.orchestrator.*"
+
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
 disallow_any_generics = false
@@ -201,7 +194,24 @@ module = [
   # clean (verified via ``mypy --strict``).
   "backend.services.models",
   "backend.services.registry",
+  # P4.7c: retired ``backend.agents.*`` + ``backend.tools.*`` override
+  # blocks — all agent + tool modules pass ``mypy --strict``.
+  "backend.agents.base_agent",
+  "backend.agents.triage_agent",
+  "backend.agents.detective_agent",
+  "backend.agents.surgeon_agent",
+  "backend.agents.validator_agent",
+  "backend.tools.executor",
+  "backend.tools.patch_tool",
+  "backend.tools.read_only_tools",
+  "backend.tools.active_tools",
+  "backend.tools.restart_tool",
+  "backend.tools.tool_schemas",
+  # ``shared.tool_registry`` got its last ``__init__`` annotation in
+  # the P4.7c pass — promote it too.
+  "backend.shared.tool_registry",
 ]
+
 
 
 disallow_untyped_defs = true

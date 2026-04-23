@@ -10,6 +10,7 @@ Production hardening:
 
 import asyncio
 import logging
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -79,7 +80,12 @@ class ToolExecutor(IToolExecutor):
             security._config.restart_cooldown_seconds,
         )
 
-        self._tool_map = {
+        # ``Any`` here is intentional: the six tool classes have divergent
+        # ``execute(...)`` signatures and a common ``definition()``
+        # staticmethod, but no shared ABC. Narrowing this to a ``Protocol``
+        # would force every tool to declare its full ``execute`` kwargs on
+        # the protocol, which is out-of-scope for this annotation pass.
+        self._tool_map: dict[str, tuple[Any, ToolCategory]] = {
             "read_file": (self._read_file, ToolCategory.READ_ONLY),
             "grep_search": (self._grep, ToolCategory.READ_ONLY),
             "fetch_docs": (self._fetch, ToolCategory.READ_ONLY),
@@ -87,6 +93,7 @@ class ToolExecutor(IToolExecutor):
             "apply_patch": (self._patch, ToolCategory.ACTIVE),
             "restart_service": (self._restart, ToolCategory.ACTIVE),
         }
+
 
     def _audit(self, action: str, detail: str, result: str = "", metadata: dict | None = None):
         """Log to immutable audit trail if configured."""
@@ -198,11 +205,17 @@ class ToolExecutor(IToolExecutor):
                 )
 
             # Credential presented — verify with the vault.
+            # mypy: after the ``credential is None: return`` guard above,
+            # ``credential`` is narrowed to ``JITCredential``; re-read the
+            # fields so mypy sees ``str`` instead of ``str | None``.
+            credential_id_for_verify = credential.credential_id
+            agent_id_for_verify = credential.agent_id
             if not self._vault.verify_credential(
                 credential_id_for_verify,
                 agent_id_for_verify,
                 expected_scope,
             ):
+
                 logger.warning(
                     f"[VAULT] Credential verification failed for tool "
                     f"'{tool_call.tool_name}' "

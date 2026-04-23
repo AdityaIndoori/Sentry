@@ -54,9 +54,10 @@ def _apply_unified_diff(original: str, diff: str) -> str | None:
         idx = start_line - 1  # Convert 1-indexed to 0-indexed
 
         # Build removal and addition lists from the hunk
-        new_block = []
+        new_block: list[tuple[str, str]] = []
 
         for hl in hunk_lines:
+
             if not hl and not new_block:
                 # Skip leading empty lines
                 continue
@@ -136,13 +137,19 @@ class ApplyPatchTool:
                 "audit_only": True,
             }
 
-        # Create backup
-        backup_path = full_path + ".bak"
+        # Create backup. ``backup_path`` is ``str`` during the copy and
+        # promotes to ``str | None`` only if the copy fails (so the rest
+        # of the function uses a truthy check before dereferencing it).
+        initial_backup_path = full_path + ".bak"
+        backup_path: str | None
         try:
-            shutil.copyfile(full_path, backup_path)
+            shutil.copyfile(full_path, initial_backup_path)
+            backup_path = initial_backup_path
         except OSError as e:
             logger.warning(f"Backup failed for {file_path}: {e} — proceeding without backup")
             backup_path = None
+
+
 
         # Normalize diff
         if diff and not diff.endswith("\n"):

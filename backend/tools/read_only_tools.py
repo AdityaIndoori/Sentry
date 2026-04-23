@@ -83,9 +83,10 @@ class GrepSearchTool:
         except re.error as e:
             return {"success": False, "error": f"Invalid regex: {e}"}
 
-        results = []
+        results: list[str] = []
         try:
             for root, _, files in os.walk(search_path):
+
                 if len(results) >= self._max_results:
                     break
                 for fname in files:
