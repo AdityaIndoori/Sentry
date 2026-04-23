@@ -184,7 +184,10 @@ module = [
   "backend.api.auth",
   "backend.api.broadcaster",
   "backend.persistence.session",
+  "backend.persistence.models",
   "backend.persistence.repositories.token_repo",
+  "backend.persistence.repositories.incident_repo",
+  "backend.persistence.repositories.audit_repo",
   # P4.7a: retired the ``backend.watcher.*`` override block — the
   # concrete ``LogWatcher`` + the ``ILogWatcher`` port are both fully
   # annotated and strict-mode clean.

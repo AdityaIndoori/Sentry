@@ -33,7 +33,9 @@ import hashlib
 import json
 import logging
 import threading
+from collections.abc import Coroutine
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import select
 
@@ -70,13 +72,13 @@ class PostgresAuditLog:
         detail: str,
         result: str,
         chain_of_thought: str = "",
-        metadata: dict | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Append one immutable entry. Returns the new entry_hash."""
         with self._lock:
             prev = self._last_hash if self._last_hash is not None else self._sync_get_last_hash()
 
-            entry = {
+            entry: dict[str, Any] = {
                 "timestamp": datetime.now(UTC).isoformat(),
                 "agent_id": agent_id,
                 "action": action,
@@ -97,8 +99,9 @@ class PostgresAuditLog:
             self._last_hash = entry_hash
             return entry_hash
 
-    def read_all(self) -> list[dict]:
-        return _run_sync(self._read_all_async(), label="audit.read_all")
+    def read_all(self) -> list[dict[str, Any]]:
+        result = _run_sync(self._read_all_async(), label="audit.read_all")
+        return result if result is not None else []
 
     def verify_integrity(self) -> bool:
         entries = self.read_all()
@@ -130,6 +133,8 @@ class PostgresAuditLog:
 
     def _sync_get_last_hash(self) -> str:
         h = _run_sync(self._fetch_last_hash(), label="audit.last_hash")
+        if h is None:
+            h = _GENESIS
         self._last_hash = h
         return h
 
@@ -144,7 +149,7 @@ class PostgresAuditLog:
             ).scalar_one_or_none()
             return row if row else _GENESIS
 
-    async def _persist_entry(self, entry: dict) -> None:
+    async def _persist_entry(self, entry: dict[str, Any]) -> None:
         async with self._db.sessionmaker() as session:
             session.add(
                 AuditLogRow(
@@ -162,7 +167,7 @@ class PostgresAuditLog:
             )
             await session.commit()
 
-    async def _read_all_async(self) -> list[dict]:
+    async def _read_all_async(self) -> list[dict[str, Any]]:
         async with self._db.sessionmaker() as session:
             rows = (
                 await session.execute(
@@ -172,7 +177,7 @@ class PostgresAuditLog:
         return [self._row_to_dict(r) for r in rows]
 
     @staticmethod
-    def _row_to_dict(row: AuditLogRow) -> dict:
+    def _row_to_dict(row: AuditLogRow) -> dict[str, Any]:
         # Use the exact ISO string that was hashed at log_action() time.
         # Reconstituting the DateTime -> isoformat() can change precision
         # or timezone formatting (e.g. "+00:00" vs "Z"), breaking the
@@ -195,12 +200,12 @@ class PostgresAuditLog:
 # ──────────────────────────────────────────────────────────────────────
 
 
-def _compute_hash(entry: dict) -> str:
+def _compute_hash(entry: dict[str, Any]) -> str:
     payload = json.dumps(entry, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _run_sync(coro, *, label: str):
+def _run_sync[T](coro: Coroutine[Any, Any, T], *, label: str) -> T | None:
     """Run an async coroutine from a sync caller.
 
     Works from both non-async code and from within a live event loop:
@@ -211,8 +216,8 @@ def _run_sync(coro, *, label: str):
         loop = asyncio.get_event_loop()
         if loop.is_running():
             # Another loop is live — spin a worker thread with its own loop.
-            result_box: dict = {}
-            error_box: dict = {}
+            result_box: dict[str, T] = {}
+            error_box: dict[str, BaseException] = {}
 
             def runner() -> None:
                 try:

@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import and_, select
 
@@ -183,11 +184,12 @@ class IncidentRepository:
 # ──────────────────────────────────────────────────────────────────────
 
 
-def _serialize_event(evt) -> dict:
+def _serialize_event(evt: Any) -> dict[str, Any]:
     if isinstance(evt, dict):
         return evt
     if hasattr(evt, "to_dict"):
-        return evt.to_dict()
+        result: dict[str, Any] = evt.to_dict()
+        return result
     return {"line_content": str(evt)}
 
 

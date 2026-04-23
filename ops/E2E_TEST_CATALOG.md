@@ -199,7 +199,7 @@ feature in P1–P3 adds rows here.
 
 ---
 
-## Test Scoreboard (as of P4.1 + P4.2 + P4.3 + P4.4 + P4.5 + P4.6 + P4.7a + P4.7b + P4.8 + P4.9a)
+## Test Scoreboard (as of P4.1 + P4.2 + P4.3 + P4.4 + P4.5 + P4.6 + P4.7a + P4.7b + P4.8 + P4.9a + P4.9b)
 
 
 
@@ -234,6 +234,51 @@ Combined unit + E2E: **724 passed / 11 skipped / 1 xfailed / 0 failed**.
 | **P4.7b (retire backend.services + backend.mcp_tools mypy overrides)** | **718 passed / 9 skipped / 1 xfailed / 0 failed** (no new tests — type-system tightening) |
 | **P4.8 (SEC-30: audit_log DB append-only triggers)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (+6 unit, +2 Postgres-gated skips) |
 | **P4.9a (close the P4.7c generics gap in agents + tools)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (no new tests — generics / annotation tightening) |
+| **P4.9b (persistence.repositories generics sweep + promote)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (no new tests — generics / annotation tightening) |
+
+### P4.9b delta (``backend.persistence.repositories.*`` generics sweep + strict-islands promote)
+
+Second slice of the CI-hardening sweep. ``backend.persistence.repositories.*``
+never had a dedicated override block (it fell through to the global
+strict-ish defaults in ``[tool.mypy]``) which means its 14 pending
+``disallow_any_generics`` violations were also CI-invisible — same
+silent failure as the P4.9a agents/tools issue.
+
+**Fixes:**
+
+* ``backend/persistence/repositories/audit_repo.py`` — typed the
+  ``metadata: dict[str, Any] | None`` kwarg on ``log_action``, typed
+  the `entry: dict[str, Any]` building block, parameterised every
+  ``dict``/``list`` return (``read_all``, ``_fetch_last_hash``,
+  ``_persist_entry``, ``_read_all_async``, ``_row_to_dict``,
+  ``_compute_hash``). The ``_run_sync`` helper now uses PEP 695
+  generic syntax (``def _run_sync[T](coro: Coroutine[Any, Any, T], …)
+  -> T | None``) and its internal ``result_box`` / ``error_box``
+  dicts are typed. Added ``None``-handling in the two call-sites
+  that previously relied on the implicit return being non-``None``
+  (``read_all`` falls back to ``[]``, ``_sync_get_last_hash`` falls
+  back to ``_GENESIS``).
+* ``backend/persistence/repositories/incident_repo.py`` — typed the
+  ``_serialize_event(evt: Any) -> dict[str, Any]`` helper; local
+  ``result: dict[str, Any] = evt.to_dict()`` annotation so mypy
+  knows the return is dict, not ``Any``.
+* ``pyproject.toml`` strict-islands list expanded 28 → 31 modules
+  with three new entries: ``backend.persistence.models`` (already
+  clean, retroactively promoted), ``backend.persistence.repositories.incident_repo``,
+  and ``backend.persistence.repositories.audit_repo``.
+
+**Verification:**
+
+* ``python -m mypy backend/persistence/ --ignore-missing-imports`` →
+  0 errors in 9 source files.
+* ``python -m ruff check backend/persistence/`` → clean after one
+  UP047 fix (PEP 695 generic syntax).
+* ``pytest`` targeted subset (``test_persistence`` +
+  ``test_audit_integration`` + ``test_audit_log_immutability``):
+  38 passed / 2 skipped.
+* Full-backend mypy error count: **83 → 19** after P4.9a + P4.9b
+  (remaining errors live in ``orchestrator`` + ``shared/factory`` +
+  ``api/app``, each queued for its own sub-slice).
 
 ### P4.9a delta (close the P4.7c generics gap in ``backend.agents.*`` + ``backend.tools.*``)
 
