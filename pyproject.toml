@@ -163,6 +163,31 @@ disallow_incomplete_defs = false
 disallow_any_generics = false
 warn_return_any = false
 
+[[tool.mypy.overrides]]
+# P4.9g — three modules gate optional observability deps through
+# ``try: import … except ImportError: name = None`` blocks. Whether
+# each ``# type: ignore`` comment is "used" depends on whether the
+# underlying package ships with the current install:
+#
+#   * Local dev without ``prometheus_client`` / ``structlog`` /
+#     ``opentelemetry-*`` → ``ignore`` is unused (mypy treats the
+#     import as ``Any`` via ``--ignore-missing-imports``).
+#   * CI with the full ``backend/requirements.txt`` installed →
+#     ``ignore`` IS used (mypy sees the real ``type[CollectorRegistry]``
+#     etc. and the ``None`` reassignment would be an error without it).
+#
+# Rather than pick one environment and make the other red, turn off
+# ``warn_unused_ignores`` for exactly these three modules. Every other
+# strict island keeps the global ``warn_unused_ignores = true`` so we
+# still catch stale ignore comments project-wide.
+module = [
+  "backend.shared.metrics",
+  "backend.shared.logging_config",
+  "backend.shared.observability",
+]
+warn_unused_ignores = false
+
+
 # ── Strict islands ─────────────────────────────────────────────────
 # Modules that ARE fully annotated and held to strict mode. Adding a
 # module here is a one-line commitment that it stays clean. Expanded

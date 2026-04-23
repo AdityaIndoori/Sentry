@@ -33,6 +33,13 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+# P4.9g — ``ImportError`` fallback for the optional OTel SDK. When the
+# operator skips the OTel install (dev machines without the extras),
+# each imported symbol is rebound to ``None`` so the rest of the module
+# can guard on ``_OTEL_AVAILABLE``. Mypy sees the real types in the
+# ``try`` branch, so the fallback assignments are annotated as ``Any``
+# with ``type: ignore`` tags to make the narrowing explicit without
+# hiding real errors elsewhere.
 try:  # pragma: no cover — optional dep
     from opentelemetry import trace
     from opentelemetry.sdk.resources import Resource
@@ -47,17 +54,18 @@ try:  # pragma: no cover — optional dep
             OTLPSpanExporter,
         )
     except ImportError:  # pragma: no cover
-        OTLPSpanExporter = None
+        OTLPSpanExporter = None  # type: ignore[assignment,misc]
 
     _OTEL_AVAILABLE = True
 except ImportError:  # pragma: no cover
-    trace = None
-    Resource = None
-    TracerProvider = None
-    BatchSpanProcessor = None
-    ConsoleSpanExporter = None
-    OTLPSpanExporter = None
+    trace = None  # type: ignore[assignment]
+    Resource: Any = None  # type: ignore[assignment,misc,no-redef]
+    TracerProvider: Any = None  # type: ignore[assignment,misc,no-redef]
+    BatchSpanProcessor: Any = None  # type: ignore[assignment,misc,no-redef]
+    ConsoleSpanExporter: Any = None  # type: ignore[assignment,misc,no-redef]
+    OTLPSpanExporter: Any = None  # type: ignore[assignment,misc,no-redef]
     _OTEL_AVAILABLE = False
+
 
 
 # ─── FastAPI / httpx / asyncpg instrumentation plumbing ────────────────
