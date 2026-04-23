@@ -4,7 +4,9 @@ P0 regression tests — one per bug fixed in the production hardening pass.
 These tests lock in fixes for:
   1.  ESCALATED incident leak (incidents stayed in _active_incidents forever).
   2.  _resolved_incidents deque with bounded length.
-  3.  JSONMemoryStore atomic writes (tmp + fsync + os.replace).
+  3.  (retired P3.4b) JSONMemoryStore atomic writes — the JSON store was
+      deleted; memory now goes through SQLAlchemy's transactional write
+      path, which has stronger atomicity guarantees than tmp+rename did.
   4.  LogWatcher UTF-8 codepoint split across polls.
   5.  LogWatcher inode-based rotation detection.
   6.  LogWatcher start() returns a task handle.
@@ -35,7 +37,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from backend.memory.store import JSONMemoryStore
 from backend.orchestrator.engine import MAX_RESOLVED_INCIDENTS, Orchestrator
 from backend.shared.circuit_breaker import CostCircuitBreaker
 from backend.shared.config import (
@@ -169,49 +170,13 @@ class TestResolvedIncidentsDeque:
 
 
 # ═══════════════════════════════════════════════════════════════
-# Fix #3 — JSONMemoryStore atomic writes
+# Fix #3 — (retired P3.4b)
+#
+# JSONMemoryStore was deleted; memory is now persisted via SQLAlchemy
+# session transactions which provide atomicity via the underlying
+# engine (Postgres / SQLite WAL). The tmp+fsync+os.replace invariant
+# that used to live here no longer applies.
 # ═══════════════════════════════════════════════════════════════
-
-
-class TestAtomicMemoryWrites:
-    @pytest.mark.asyncio
-    async def test_no_tmp_file_left_after_normal_write(self, tmp_path):
-        store = JSONMemoryStore(
-            MemoryConfig(
-                file_path=str(tmp_path / "m.json"),
-                backup_on_write=False,
-            )
-        )
-        await store.save(
-            MemoryEntry(id="A", symptom="s", root_cause="r", fix="f")
-        )
-        # The .tmp file must not exist after a successful write.
-        assert not (tmp_path / "m.json.tmp").exists()
-        assert (tmp_path / "m.json").exists()
-
-    @pytest.mark.asyncio
-    async def test_crash_mid_write_leaves_original_intact(self, tmp_path):
-        """If os.replace never happens, the original file must be unchanged."""
-        path = tmp_path / "m.json"
-        store = JSONMemoryStore(
-            MemoryConfig(file_path=str(path), backup_on_write=False)
-        )
-        # First successful save.
-        await store.save(MemoryEntry(id="A", symptom="s", root_cause="r", fix="f"))
-        original = path.read_text()
-
-        # Second save: make os.replace raise *after* the tmp file exists.
-        with patch(
-            "backend.memory.store.os.replace",
-            side_effect=OSError("simulated crash"),
-        ):
-            with pytest.raises(OSError):
-                await store.save(
-                    MemoryEntry(id="B", symptom="t", root_cause="q", fix="g")
-                )
-
-        # Original file must be untouched.
-        assert path.read_text() == original
 
 
 # ═══════════════════════════════════════════════════════════════

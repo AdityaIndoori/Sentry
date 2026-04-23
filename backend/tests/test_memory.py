@@ -1,19 +1,44 @@
 """
-TDD tests for JSONMemoryStore.
+Memory store contract tests.
+
+P3.4b note
+----------
+The legacy ``JSONMemoryStore`` was deleted in P3.4b. Memory is now always
+backed by :class:`backend.persistence.repositories.memory_repo.PostgresMemoryRepo`
+against an async SQLAlchemy engine (Postgres in prod, SQLite in dev /
+tests). This module keeps the original behavioural-coverage tests but
+exercises them against ``PostgresMemoryRepo`` with an in-memory SQLite
+database so nothing here requires Docker or Postgres.
 """
 
+from __future__ import annotations
+
 import pytest
-from backend.memory.store import JSONMemoryStore
+
+from backend.persistence.repositories.memory_repo import PostgresMemoryRepo
+from backend.persistence.session import build_database
 from backend.shared.models import MemoryEntry
 
 
 @pytest.fixture
-def store(memory_config):
-    return JSONMemoryStore(memory_config)
+async def store(tmp_path):
+    """Fresh file-backed SQLite + PostgresMemoryRepo per test.
+
+    We use a file rather than ``:memory:`` because pytest-asyncio's
+    auto mode spins a fresh event loop per function; in-memory SQLite
+    handles pinned to the fixture's loop get disposed before the test
+    body runs. A tmp_path file sidesteps that entirely.
+    """
+    database = build_database(f"sqlite+aiosqlite:///{tmp_path / 'memory.db'}")
+    await database.create_all()
+    try:
+        yield PostgresMemoryRepo(database)
+    finally:
+        await database.dispose()
 
 
 @pytest.mark.asyncio
-class TestJSONMemoryStore:
+class TestMemoryStore:
     async def test_load_empty(self, store):
         entries = await store.load()
         assert entries == []

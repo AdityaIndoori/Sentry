@@ -49,7 +49,6 @@ def build_container(
     # cheap and doesn't eagerly pull in the Anthropic SDK etc.
     from backend.api.auth import TokenRegistry, seed_tokens_from_settings
     from backend.shared.secrets import build_secrets_provider
-    from backend.memory.store import JSONMemoryStore
     from backend.orchestrator.engine import Orchestrator
     from backend.orchestrator.llm_client import create_llm_client
     from backend.shared.agent_throttle import AgentThrottle
@@ -71,30 +70,83 @@ def build_container(
     registry = create_default_registry()
     security = SecurityGuard(config.security)
 
-    # ── P1.2: conditional persistence layer ───────────────────────────
+    # ── P1.2 / P3.4b: unified SQLAlchemy persistence ──────────────────
     #
-    # When ``settings.database_url`` is set we build a SQLAlchemy engine
-    # and use the Postgres-backed memory + audit log + incident
-    # repositories. When it's empty (the legacy default), we fall back
-    # to the JSON-on-disk memory store and JSONL audit log so the old
-    # docker-compose behaviour keeps working.
-    database = None
-    incident_repo = None
+    # Memory is *always* backed by :class:`PostgresMemoryRepo` — the
+    # legacy :class:`JSONMemoryStore` was deleted in P3.4b. When
+    # ``settings.database_url`` is unset we synthesize an async-SQLite
+    # URL next to the configured memory file path so single-process
+    # dev + tests work without a running database. In production the
+    # operator sets ``DATABASE_URL`` to a real Postgres DSN.
+    #
+    # Audit log remains dual-mode: the hash-chained JSONL
+    # :class:`ImmutableAuditLog` stays the default when no explicit DB
+    # URL is set (it writes to disk with no DB round-trip). Setting
+    # ``DATABASE_URL`` upgrades it to :class:`PostgresAuditLog`.
+    from backend.persistence.repositories.incident_repo import IncidentRepository
+    from backend.persistence.repositories.memory_repo import PostgresMemoryRepo
+    from backend.persistence.session import build_database
+
+    database_url = settings.database_url
+    synthesized_sqlite = False
+    if not database_url:
+        # Derive a sqlite file next to the memory path so existing
+        # volume mounts (``/app/data``) pick it up automatically.
+        import os as _os
+
+        data_dir = _os.path.dirname(config.memory.file_path) or "."
+        _os.makedirs(data_dir, exist_ok=True)
+        database_url = f"sqlite+aiosqlite:///{_os.path.join(data_dir, 'sentry.db')}"
+        synthesized_sqlite = True
+
+    database = build_database(database_url)
+    memory = PostgresMemoryRepo(database)
+    incident_repo = IncidentRepository(database)
+
     if settings.database_url:
         from backend.persistence.repositories.audit_repo import PostgresAuditLog
-        from backend.persistence.repositories.incident_repo import IncidentRepository
-        from backend.persistence.repositories.memory_repo import PostgresMemoryRepo
-        from backend.persistence.session import build_database
-
-        database = build_database(settings.database_url)
-        memory = PostgresMemoryRepo(database)
         audit_log = PostgresAuditLog(database)
-        incident_repo = IncidentRepository(database)
-        logger.info("persistence: Postgres/SQLAlchemy mode (%s)", settings.database_url.split("://", 1)[0])
+        logger.info(
+            "persistence: SQLAlchemy mode (%s)",
+            settings.database_url.split("://", 1)[0],
+        )
     else:
-        memory = JSONMemoryStore(config.memory)
         audit_log = ImmutableAuditLog(config.audit_log_path)
-        logger.info("persistence: JSON/file mode (set DATABASE_URL to switch)")
+        logger.info(
+            "persistence: sqlite+file-audit mode (memory=%s, audit=jsonl)",
+            database_url,
+        )
+
+    # Bootstrap memory tables on first boot for sqlite/dev; Alembic owns
+    # schema evolution in production Postgres. Run the async bootstrap
+    # in a worker thread with its own event loop so we don't interfere
+    # with any pytest-asyncio / lifespan loop already wired into the
+    # calling thread.
+    if synthesized_sqlite:
+        import asyncio as _asyncio
+        import threading as _threading
+
+        _err_box: dict[str, BaseException] = {}
+
+        async def _bootstrap_and_dispose() -> None:
+            # Run create_all then dispose the engine. Disposing drops the
+            # connection pool so subsequent ``sessionmaker()`` calls made
+            # from a different event loop (the test/app loop) don't
+            # inherit connections bound to this bootstrap loop.
+            await database.create_all()
+            await database.engine.dispose()
+
+        def _bootstrap_thread() -> None:
+            try:
+                _asyncio.run(_bootstrap_and_dispose())
+            except BaseException as exc:  # pragma: no cover
+                _err_box["err"] = exc
+
+        t = _threading.Thread(target=_bootstrap_thread, name="sentry-db-bootstrap", daemon=True)
+        t.start()
+        t.join()
+        if "err" in _err_box:  # pragma: no cover
+            raise _err_box["err"]
 
     tools = ToolExecutor(
         security,

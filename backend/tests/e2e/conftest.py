@@ -177,19 +177,11 @@ def build_live_stack(tmp_root: Path, llm: Optional[FakeLLMClient] = None,
     """
     settings = _build_settings_for_tmp(tmp_root, mode, watch_paths)
     container = build_container(settings, llm_override=llm or resolving_llm())
-
-    # Memory store writes need to be configured to skip backups
-    # (tests in tmpdir). We re-create just the memory store with
-    # backup_on_write=False so the scratch dir stays tidy.
-    from backend.memory.store import JSONMemoryStore
-    container.memory = JSONMemoryStore(MemoryConfig(
-        file_path=container.config.memory.file_path,
-        backup_on_write=False,
-        max_incidents_before_compaction=container.config.memory.max_incidents_before_compaction,
-    ))
-    # Rewire the orchestrator's memory pointer to the new store.
-    container.orchestrator._memory = container.memory
-
+    # P3.4b: the factory now always builds a SQLAlchemy engine (sqlite
+    # synthesized when DATABASE_URL is unset), so we no longer need to
+    # rewire the memory store after construction — it's already a
+    # PostgresMemoryRepo backed by a per-test sqlite file inside
+    # ``tmp_root / "data"``.
     return LiveStack(container=container, root=tmp_root)
 
 

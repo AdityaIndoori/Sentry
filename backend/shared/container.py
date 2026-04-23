@@ -46,7 +46,7 @@ class ServiceContainer:
     security: Any = None          # SecurityGuard
 
     # Memory + tool executor
-    memory: Any = None            # JSONMemoryStore (→ PostgresMemoryRepo in P1.2)
+    memory: Any = None            # PostgresMemoryRepo (SQLite file / Postgres)
     tools: Any = None             # ToolExecutor
 
     # LLM + pipeline

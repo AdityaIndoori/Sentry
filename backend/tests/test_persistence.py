@@ -357,9 +357,11 @@ class TestFactoryWithDatabaseUrl:
             import asyncio
             asyncio.get_event_loop().run_until_complete(container.shutdown())
 
-    def test_build_container_falls_back_to_json_when_no_url(self, tmp_path):
-        """Empty DATABASE_URL keeps the legacy JSON + JSONL stores."""
-        from backend.memory.store import JSONMemoryStore
+    def test_build_container_defaults_to_sqlite_when_no_url(self, tmp_path):
+        """Empty DATABASE_URL (P3.4b): synthesizes a local sqlite database for
+        memory + incidents and keeps the JSONL file audit log.
+        """
+        from backend.persistence.repositories.memory_repo import PostgresMemoryRepo
         from backend.shared.audit_log import ImmutableAuditLog
         from backend.shared.factory import build_container
         from backend.shared.settings import Settings
@@ -379,9 +381,13 @@ class TestFactoryWithDatabaseUrl:
 
         container = build_container(settings, llm_override=_FakeLLM())
         try:
-            assert container.database is None
-            assert container.incident_repo is None
-            assert isinstance(container.memory, JSONMemoryStore)
+            # P3.4b: database is *always* built; sqlite is synthesized
+            # next to the memory file.
+            assert container.database is not None
+            assert container.database.url.startswith("sqlite+aiosqlite:///")
+            assert container.incident_repo is not None
+            assert isinstance(container.memory, PostgresMemoryRepo)
+            # Audit log stays JSONL when no explicit DB URL is set.
             assert isinstance(container.audit_log, ImmutableAuditLog)
         finally:
             import asyncio

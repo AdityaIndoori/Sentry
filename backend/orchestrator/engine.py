@@ -146,14 +146,45 @@ class Orchestrator(IOrchestrator):
     async def _is_duplicate(self, fingerprint: str) -> bool:
         """Return True if this fingerprint has been seen within the dedup window.
 
-        Uses ``incident_repo`` when available (for correctness across
-        restarts); falls back to an in-memory dict otherwise. Either
-        way the window is ``self._dedup_window`` seconds.
+        Design
+        ------
+        We check the in-memory ``_recent_fingerprints`` cache under a
+        single async lock *first*. This gives us correct dedup under
+        burst / log-storm concurrency (50 identical events that arrive
+        in the same second must collapse to one incident) without
+        needing the DB to serialize them — two concurrent
+        ``dedupe_fingerprint`` queries against the repo would both
+        return False before either observed the other's insert.
+
+        When ``incident_repo`` is wired we additionally consult it
+        *after* the cache miss, which catches process-restart cases
+        where the in-memory cache is empty but the DB still has a
+        row inside the window.
+
+        Either way the window is ``self._dedup_window`` seconds.
         """
         if not fingerprint:
             return False
 
-        # Persisted path — authoritative across process restarts.
+        now = time.monotonic()
+        async with self._dedup_lock:
+            # Opportunistic eviction so the dict doesn't grow forever.
+            cutoff = now - (self._dedup_window * 2)
+            if self._recent_fingerprints:
+                stale = [fp for fp, ts in self._recent_fingerprints.items() if ts < cutoff]
+                for fp in stale:
+                    self._recent_fingerprints.pop(fp, None)
+
+            last = self._recent_fingerprints.get(fingerprint)
+            if last is not None and (now - last) < self._dedup_window:
+                return True
+            # Record this observation synchronously under the lock so
+            # concurrent callers (asyncio.gather of 50 identical events)
+            # that race in after us all see the mark.
+            self._recent_fingerprints[fingerprint] = now
+
+        # Cache miss. Ask the persistent repo (if available) — this is
+        # authoritative across process restarts.
         if self._incident_repo is not None:
             try:
                 return await self._incident_repo.dedupe_fingerprint(
@@ -162,28 +193,7 @@ class Orchestrator(IOrchestrator):
             except Exception:  # pragma: no cover
                 logger.exception("dedup: incident_repo.dedupe_fingerprint failed")
                 return False
-
-        # In-memory fallback.
-        now = time.monotonic()
-        async with self._dedup_lock:
-            # Trim stale entries opportunistically so the dict doesn't grow
-            # unboundedly. ``window*2`` keeps the cache warm enough for
-            # bursty workloads without running a background janitor.
-            cutoff = now - (self._dedup_window * 2)
-            if self._recent_fingerprints:
-                # Copy keys first because we mutate in the loop.
-                stale = [fp for fp, ts in self._recent_fingerprints.items() if ts < cutoff]
-                for fp in stale:
-                    self._recent_fingerprints.pop(fp, None)
-
-            last = self._recent_fingerprints.get(fingerprint)
-            if last is not None and (now - last) < self._dedup_window:
-                return True
-            # Record this observation — even if the caller ultimately
-            # rejects the event for a different reason, we still don't
-            # want to re-accept the identical line one second later.
-            self._recent_fingerprints[fingerprint] = now
-            return False
+        return False
 
     # ------------------------------------------------------------------
     # Main event handler
