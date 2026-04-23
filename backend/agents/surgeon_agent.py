@@ -16,6 +16,7 @@ from typing import Any
 from backend.agents.base_agent import BaseAgent
 from backend.shared.agent_throttle import AgentThrottle
 from backend.shared.ai_gateway import AIGateway
+from backend.shared.audit_log import ImmutableAuditLog
 from backend.shared.models import Incident
 from backend.shared.prompts import REMEDIATION_SYSTEM_PROMPT as SURGEON_SYSTEM_PROMPT
 from backend.shared.tool_registry import TrustedToolRegistry
@@ -40,15 +41,19 @@ class SurgeonAgent(BaseAgent):
         gateway: AIGateway,
         throttle: AgentThrottle,
         config: Any,
-        audit_log=None,
-    ):
+        audit_log: ImmutableAuditLog | None = None,
+    ) -> None:
         super().__init__(vault, AgentRole.SURGEON, gateway, audit_log=audit_log,
                          llm=llm, tools=tools)
         self._registry = registry
         self._throttle = throttle
         self._config = config
 
-    async def run(self, incident: Incident, tool_results_context: list | None = None) -> dict:
+    async def run(
+        self,
+        incident: Incident,
+        tool_results_context: list[str] | None = None,
+    ) -> dict[str, Any]:
         """
         Propose and optionally apply a fix.
         Returns: {"fix_description": str, "fix_applied": bool, "tool_results": list,
@@ -58,8 +63,8 @@ class SurgeonAgent(BaseAgent):
         self._activities = []
         self._call_count = 0
         cred = self._get_credential(scope="llm_call", ttl=90)
-        tool_results = []
-        tools_used = []
+        tool_results: list[dict[str, Any]] = []
+        tools_used: list[str] = []
         total_input_tokens = 0
         total_output_tokens = 0
         max_remediation_loops = 4
@@ -148,8 +153,8 @@ class SurgeonAgent(BaseAgent):
         finally:
             self._vault.revoke_credential(cred.credential_id)
 
-    def _parse_response(self, text: str) -> dict:
-        result = {}
+    def _parse_response(self, text: str) -> dict[str, Any]:
+        result: dict[str, Any] = {}
         match = re.search(r"FIX\s*PROPOSED:\s*(.+?)(?:\n|$)", text, re.IGNORECASE)
         if match:
             result["fix_proposed"] = match.group(1).strip()

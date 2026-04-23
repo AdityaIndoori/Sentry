@@ -199,7 +199,7 @@ feature in P1–P3 adds rows here.
 
 ---
 
-## Test Scoreboard (as of P4.1 + P4.2 + P4.3 + P4.4 + P4.5 + P4.6 + P4.7a + P4.7b + P4.8)
+## Test Scoreboard (as of P4.1 + P4.2 + P4.3 + P4.4 + P4.5 + P4.6 + P4.7a + P4.7b + P4.8 + P4.9a)
 
 
 
@@ -233,6 +233,70 @@ Combined unit + E2E: **724 passed / 11 skipped / 1 xfailed / 0 failed**.
 | **P4.7a (retire backend.watcher mypy override)** | **718 passed / 9 skipped / 1 xfailed / 0 failed** (no new tests — type-system tightening) |
 | **P4.7b (retire backend.services + backend.mcp_tools mypy overrides)** | **718 passed / 9 skipped / 1 xfailed / 0 failed** (no new tests — type-system tightening) |
 | **P4.8 (SEC-30: audit_log DB append-only triggers)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (+6 unit, +2 Postgres-gated skips) |
+| **P4.9a (close the P4.7c generics gap in agents + tools)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (no new tests — generics / annotation tightening) |
+
+### P4.9a delta (close the P4.7c generics gap in ``backend.agents.*`` + ``backend.tools.*``)
+
+P4.7c promoted the ``backend.agents.*`` and ``backend.tools.*`` packages to the
+strict-islands list in ``pyproject.toml`` but the commit only drained the
+``disallow_untyped_defs`` subset of strict mode — the global
+``disallow_any_generics=true`` default was still flagging **34 "Missing type
+arguments for generic type" errors** that CI was silently swallowing via the
+``|| true`` suffix on the mypy step. This slice finishes the job so every module
+those overrides used to cover is actually strict-clean.
+
+**Fixes (all `dict`/`list` → parameterised, `None`-defaulted kwargs typed,
+`-> None` added where missing):**
+
+* ``backend/agents/base_agent.py`` — 15 sites:
+  * ``_activities: list[dict[str, Any]]`` (was ``list[dict]``).
+  * ``_log_activity`` / ``_audit`` / ``_get_credential`` gained return
+    annotations (``-> None`` / ``-> JITCredential``) and typed
+    ``metadata: dict[str, Any] | None`` kwargs.
+  * ``_call_llm`` / ``_call_tool`` / ``_get_tool_definitions`` now declare
+    parameterised ``dict[str, Any]`` / ``list[dict[str, Any]]`` signatures.
+  * The three "duck-typed return from ``self.__tools.get_*_tool_definitions()``"
+    call sites wrap the result in ``cast(list[dict[str, Any]], …)`` because the
+    ``__tools`` attribute is intentionally ``Any`` (six divergent tool
+    classes, no shared ABC — see the ``_tool_map`` comment in
+    ``ToolExecutor``).
+  * ``_call_llm`` / ``_call_tool`` now ``cast(dict[str, Any], response)`` /
+    ``cast(ToolResult, result)`` before returning, because the ``__llm`` /
+    ``__tools`` attributes are ``Any``.
+* ``backend/agents/triage_agent.py``, ``validator_agent.py``,
+  ``detective_agent.py``, ``surgeon_agent.py`` — typed the ``audit_log=None``
+  kwargs as ``ImmutableAuditLog | None``, typed every ``dict`` return
+  annotation, typed ``memory_hints: list[dict[str, Any]] | None`` /
+  ``tool_results_context: list[str] | None``, typed
+  ``tool_results: list[dict[str, Any]]`` and ``tools_used: list[str]``
+  accumulators in ``SurgeonAgent.run``, typed ``result: dict[str, Any]`` in
+  ``SurgeonAgent._parse_response``.
+* ``backend/tools/executor.py`` — typed ``_audit`` / ``_validate_tool_content``
+  signatures, added parameterised returns to the three ``get_*_tool_definitions``
+  methods.
+* ``backend/tools/patch_tool.py`` — typed ``execute`` /  ``_try_git_apply`` /
+  ``definition`` returns.
+* ``backend/tools/read_only_tools.py`` — typed ``execute`` / ``definition``
+  returns on all three classes (``ReadFileTool``, ``GrepSearchTool``,
+  ``FetchDocsTool``).
+* ``backend/tools/active_tools.py``, ``restart_tool.py``, ``tool_schemas.py``
+  — ``execute``, ``definition``, ``pydantic_to_input_schema`` returns.
+
+**Verification:**
+
+* ``python -m mypy backend/agents/ backend/tools/ --ignore-missing-imports`` →
+  0 errors in 13 source files.
+* ``python -m ruff check backend/agents/ backend/tools/`` → clean.
+* Full suite: **724 passed / 11 skipped / 1 xfailed / 0 failed**
+  (baseline preserved, no behavioural change).
+
+**Why "P4.9a", not "P4.9"**: this is the first of roughly six sub-slices
+that finish the CI-hardening deliverable. The next sub-slices drain the
+remaining ``disallow_any_generics`` backlog in
+``backend/persistence/repositories/*`` (P4.9b), retire the
+``backend.orchestrator.*`` / ``backend.api.app`` / ``backend.shared.*``
+overrides (P4.9c–e), and flip the ``|| true`` off the mypy CI step (P4.9f)
+— after which ``mypy backend/`` enforces the type contract on every PR.
 
 ### P4.8 delta (SEC-30 — audit_log append-only triggers)
 

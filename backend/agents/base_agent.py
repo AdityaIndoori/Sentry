@@ -13,7 +13,7 @@ Each agent:
 
 import logging
 from abc import ABC
-from typing import Any
+from typing import Any, cast
 
 from backend.shared.ai_gateway import AIGateway
 from backend.shared.audit_log import ImmutableAuditLog
@@ -21,7 +21,7 @@ from backend.shared.metrics import inc_llm_call, inc_tool_call, observe_llm_cost
 from backend.shared.models import ToolCall, ToolResult
 from backend.shared.observability import get_telemetry
 from backend.shared.security import SecurityGuard
-from backend.shared.vault import AgentRole, IVault, NonHumanIdentity
+from backend.shared.vault import AgentRole, IVault, JITCredential, NonHumanIdentity
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ class BaseAgent(ABC):
         self.__llm = llm
         self.__tools = tools
         # Activity log — collected during run(), returned to graph node
-        self._activities: list[dict] = []
+        self._activities: list[dict[str, Any]] = []
         self._call_count: int = 0
         # Register NHI
         self._nhi = vault.register_agent(role)
@@ -73,8 +73,13 @@ class BaseAgent(ABC):
 
     # ── Activity logging (returned to graph node) ─────────
 
-    def _log_activity(self, activity_type: str, message: str, detail: str = "",
-                      metadata: dict | None = None):
+    def _log_activity(
+        self,
+        activity_type: str,
+        message: str,
+        detail: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         """Record an activity entry. Graph node applies these to the incident after run()."""
         self._activities.append({
             "activity_type": activity_type,
@@ -86,7 +91,12 @@ class BaseAgent(ABC):
 
     # ── LLM access (the ONLY way to call the LLM) ────────
 
-    async def _call_llm(self, prompt: str, effort: str, tools: list | None = None) -> dict:
+    async def _call_llm(
+        self,
+        prompt: str,
+        effort: str,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """Call the LLM. Automatically logs LLM_CALL and INFO activities.
 
         This is the ONLY way to access the LLM from any agent.
@@ -191,11 +201,13 @@ class BaseAgent(ABC):
             detail=f"tokens: {input_tokens} in / {output_tokens} out",
             metadata={"input_tokens": input_tokens, "output_tokens": output_tokens},
         )
-        return response
+        return cast(dict[str, Any], response)
 
     # ── Tool access (the ONLY way to execute a tool) ──────
 
-    async def _call_tool(self, tool_name: str, arguments: dict) -> ToolResult:
+    async def _call_tool(
+        self, tool_name: str, arguments: dict[str, Any]
+    ) -> ToolResult:
         """Execute a tool. Automatically logs TOOL_CALL and TOOL_RESULT activities.
 
         This is the ONLY way to execute a tool from any agent.
@@ -266,23 +278,29 @@ class BaseAgent(ABC):
             inc_tool_call(tool_name, bool(result.success))
         except Exception:  # pragma: no cover
             logger.exception("metrics: inc_tool_call failed")
-        return result
+        return cast(ToolResult, result)
 
-    def _get_tool_definitions(self, category: str = "all") -> list:
+    def _get_tool_definitions(self, category: str = "all") -> list[dict[str, Any]]:
         """Get tool definitions for LLM tool_use parameter. No logging needed."""
         if self.__tools is None:
             return []
         if category == "read_only" and hasattr(self.__tools, 'get_read_only_tool_definitions'):
-            return self.__tools.get_read_only_tool_definitions()
+            return cast(list[dict[str, Any]], self.__tools.get_read_only_tool_definitions())
         if category == "remediation" and hasattr(self.__tools, 'get_remediation_tool_definitions'):
-            return self.__tools.get_remediation_tool_definitions()
+            return cast(list[dict[str, Any]], self.__tools.get_remediation_tool_definitions())
         if hasattr(self.__tools, 'get_tool_definitions'):
-            return self.__tools.get_tool_definitions()
+            return cast(list[dict[str, Any]], self.__tools.get_tool_definitions())
         return []
 
     # ── Audit trail (security events) ─────────────────────
 
-    def _audit(self, action: str, detail: str, result: str = "", metadata: dict | None = None):
+    def _audit(
+        self,
+        action: str,
+        detail: str,
+        result: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         """Log an action to the immutable audit trail (if configured)."""
         if self._audit_log:
             self._audit_log.log_action(
@@ -295,7 +313,7 @@ class BaseAgent(ABC):
 
     # ── Credential management ─────────────────────────────
 
-    def _get_credential(self, scope: str, ttl: int = 60):
+    def _get_credential(self, scope: str, ttl: int = 60) -> JITCredential:
         """Request a JIT credential from the vault."""
         cred = self._vault.issue_credential(self.agent_id, scope=scope, ttl_seconds=ttl)
         if not cred:

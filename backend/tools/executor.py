@@ -95,7 +95,13 @@ class ToolExecutor(IToolExecutor):
         }
 
 
-    def _audit(self, action: str, detail: str, result: str = "", metadata: dict | None = None):
+    def _audit(
+        self,
+        action: str,
+        detail: str,
+        result: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         """Log to immutable audit trail if configured."""
         if self._audit_log:
             self._audit_log.log_action(
@@ -106,7 +112,9 @@ class ToolExecutor(IToolExecutor):
                 metadata=metadata,
             )
 
-    def _validate_tool_content(self, tool_name: str, args: dict) -> str | None:
+    def _validate_tool_content(
+        self, tool_name: str, args: dict[str, Any]
+    ) -> str | None:
         """P0.1b: Enforce tool-specific content rules BEFORE AUDIT short-circuit.
 
         Returns an error string if validation fails, or None if OK. These are
@@ -478,7 +486,7 @@ class ToolExecutor(IToolExecutor):
             error=f"All {TOOL_MAX_RETRIES} attempts failed: {last_error}",
         )
 
-    def get_tool_definitions(self) -> list:
+    def get_tool_definitions(self) -> list[dict[str, Any]]:
         """Return all tool definitions (read-only + active). Used by Remediation."""
         return [
             ReadFileTool.definition(),
@@ -489,7 +497,7 @@ class ToolExecutor(IToolExecutor):
             RestartServiceTool.definition(),
         ]
 
-    def get_read_only_tool_definitions(self) -> list:
+    def get_read_only_tool_definitions(self) -> list[dict[str, Any]]:
         """Return only read-only tool definitions. Used by Diagnosis.
 
         The Diagnosis agent must investigate but NEVER modify system state.
@@ -501,7 +509,7 @@ class ToolExecutor(IToolExecutor):
             for defn in [tool.definition()]
         ]
 
-    def get_remediation_tool_definitions(self) -> list:
+    def get_remediation_tool_definitions(self) -> list[dict[str, Any]]:
         """Return tools for Remediation: read_file + active tools only.
 
         Excludes grep_search, fetch_docs, run_diagnostics to prevent the LLM

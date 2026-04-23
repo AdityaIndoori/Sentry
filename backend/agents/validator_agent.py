@@ -14,6 +14,7 @@ from typing import Any
 
 from backend.agents.base_agent import BaseAgent
 from backend.shared.ai_gateway import AIGateway
+from backend.shared.audit_log import ImmutableAuditLog
 from backend.shared.models import Incident
 from backend.shared.prompts import VERIFICATION_SYSTEM_PROMPT as VALIDATOR_SYSTEM_PROMPT
 from backend.shared.vault import AgentRole, IVault
@@ -27,10 +28,16 @@ class ValidatorAgent(BaseAgent):
     No tools - pure analysis of fix results.
     """
 
-    def __init__(self, vault: IVault, llm: Any, gateway: AIGateway, audit_log=None):
+    def __init__(
+        self,
+        vault: IVault,
+        llm: Any,
+        gateway: AIGateway,
+        audit_log: ImmutableAuditLog | None = None,
+    ) -> None:
         super().__init__(vault, AgentRole.VALIDATOR, gateway, audit_log=audit_log, llm=llm)
 
-    async def run(self, incident: Incident) -> dict:
+    async def run(self, incident: Incident) -> dict[str, Any]:
         """
         Verify fix was successful.
         Returns: {"resolved": bool, "reason": str, "input_tokens": int,
@@ -60,7 +67,7 @@ class ValidatorAgent(BaseAgent):
         finally:
             self._vault.revoke_credential(cred.credential_id)
 
-    def _parse_using_schema(self, text: str) -> dict:
+    def _parse_using_schema(self, text: str) -> dict[str, Any]:
         """Parse using the canonical VerificationResult schema (single source of truth)."""
         from backend.orchestrator.schemas import VerificationResult
         verification = VerificationResult.parse_safe(text)

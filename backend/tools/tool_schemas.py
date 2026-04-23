@@ -10,6 +10,8 @@ Usage:
   - ToolExecutor validates args with `schema.model_validate(args)` before execution
 """
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -49,7 +51,7 @@ class RestartServiceArgs(BaseModel):
     pass
 
 
-def pydantic_to_input_schema(model: type[BaseModel]) -> dict:
+def pydantic_to_input_schema(model: type[BaseModel]) -> dict[str, Any]:
     """
     Convert a Pydantic model to Anthropic-style input_schema.
 

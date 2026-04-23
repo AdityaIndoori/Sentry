@@ -5,6 +5,7 @@ Requires ACTIVE mode. In AUDIT mode, logs intent only.
 
 import asyncio
 import logging
+from typing import Any
 
 from backend.shared.security import SecurityGuard
 from backend.tools.tool_schemas import RunDiagnosticsArgs, pydantic_to_input_schema
@@ -18,7 +19,7 @@ class RunDiagnosticsTool:
     def __init__(self, security: SecurityGuard):
         self._security = security
 
-    async def execute(self, command: str) -> dict:
+    async def execute(self, command: str) -> dict[str, Any]:
         sanitized = self._security.sanitize_input(command)
         if not self._security.validate_command(sanitized):
             return {
@@ -54,7 +55,7 @@ class RunDiagnosticsTool:
             return {"success": False, "error": str(e)}
 
     @staticmethod
-    def definition() -> dict:
+    def definition() -> dict[str, Any]:
         return {
             "name": "run_diagnostics",
             "description": "Run a whitelisted diagnostic command.",

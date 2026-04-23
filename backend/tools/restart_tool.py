@@ -11,6 +11,7 @@ Rate-limited: max 1 restart per cooldown period (default 10 minutes).
 import asyncio
 import logging
 import os
+from typing import Any
 
 from backend.shared.circuit_breaker import RateLimiter
 from backend.shared.security import SecurityGuard
@@ -32,7 +33,7 @@ class RestartServiceTool:
         self._rate_limiter = rate_limiter
         self._cooldown = cooldown_seconds
 
-    async def execute(self) -> dict:
+    async def execute(self) -> dict[str, Any]:
         restart_cmd = os.environ.get("SERVICE_RESTART_CMD", "").strip()
         if not restart_cmd:
             return {
@@ -82,7 +83,7 @@ class RestartServiceTool:
             return {"success": False, "error": str(e)}
 
     @staticmethod
-    def definition() -> dict:
+    def definition() -> dict[str, Any]:
         return {
             "name": "restart_service",
             "description": (

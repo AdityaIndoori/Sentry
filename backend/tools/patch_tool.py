@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import tempfile
+from typing import Any
 
 from backend.shared.security import SecurityGuard
 from backend.tools.tool_schemas import ApplyPatchArgs, pydantic_to_input_schema
@@ -119,7 +120,7 @@ class ApplyPatchTool:
         self._security = security
         self._project_root = project_root
 
-    async def execute(self, file_path: str, diff: str) -> dict:
+    async def execute(self, file_path: str, diff: str) -> dict[str, Any]:
         file_path = self._security.sanitize_input(file_path)
         # Note: diff content is NOT sanitized — diffs legitimately contain special characters
         if not self._security.validate_path(file_path):
@@ -195,7 +196,7 @@ class ApplyPatchTool:
                     shutil.copyfile(backup_path, full_path)
             return {"success": False, "error": str(e)}
 
-    async def _try_git_apply(self, diff: str) -> dict | None:
+    async def _try_git_apply(self, diff: str) -> dict[str, Any] | None:
         """Try to apply patch via git. Returns result dict, or None if git unavailable."""
         try:
             with tempfile.NamedTemporaryFile(
@@ -240,7 +241,7 @@ class ApplyPatchTool:
             return {"success": False, "error": str(e)}
 
     @staticmethod
-    def definition() -> dict:
+    def definition() -> dict[str, Any]:
         return {
             "name": "apply_patch",
             "description": "Apply a diff patch to a file. Creates .bak backup.",

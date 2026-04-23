@@ -6,6 +6,7 @@ Implements: read_file, grep_search, fetch_docs
 import logging
 import os
 import re
+from typing import Any
 
 import aiohttp
 
@@ -28,7 +29,7 @@ class ReadFileTool:
         self._project_root = project_root
         self._max_size = security._config.max_file_size_bytes
 
-    async def execute(self, path: str) -> dict:
+    async def execute(self, path: str) -> dict[str, Any]:
         path = self._security.sanitize_input(path)
         if not self._security.validate_path(path):
             return {"success": False, "error": "Path validation failed"}
@@ -53,7 +54,7 @@ class ReadFileTool:
             return {"success": False, "error": str(e)}
 
     @staticmethod
-    def definition() -> dict:
+    def definition() -> dict[str, Any]:
         return {
             "name": "read_file",
             "description": "Read contents of a file within the project root.",
@@ -69,7 +70,7 @@ class GrepSearchTool:
         self._project_root = project_root
         self._max_results = security._config.max_grep_results
 
-    async def execute(self, query: str, path: str = ".") -> dict:
+    async def execute(self, query: str, path: str = ".") -> dict[str, Any]:
         query = self._security.sanitize_input(query)
         if not self._security.validate_path(path):
             return {"success": False, "error": "Path validation failed"}
@@ -110,7 +111,7 @@ class GrepSearchTool:
             return {"success": False, "error": str(e)}
 
     @staticmethod
-    def definition() -> dict:
+    def definition() -> dict[str, Any]:
         return {
             "name": "grep_search",
             "description": "Search for a regex pattern across project files.",
@@ -124,7 +125,7 @@ class FetchDocsTool:
     def __init__(self, security: SecurityGuard):
         self._security = security
 
-    async def execute(self, url: str) -> dict:
+    async def execute(self, url: str) -> dict[str, Any]:
         if not self._security.validate_url(url):
             return {"success": False, "error": "URL not in allow-list"}
 
@@ -141,7 +142,7 @@ class FetchDocsTool:
             return {"success": False, "error": str(e)}
 
     @staticmethod
-    def definition() -> dict:
+    def definition() -> dict[str, Any]:
         return {
             "name": "fetch_docs",
             "description": "Fetch documentation from approved domains.",

@@ -14,6 +14,7 @@ from typing import Any
 
 from backend.agents.base_agent import BaseAgent
 from backend.shared.ai_gateway import AIGateway
+from backend.shared.audit_log import ImmutableAuditLog
 from backend.shared.models import Incident
 from backend.shared.prompts import TRIAGE_SYSTEM_PROMPT
 from backend.shared.vault import AgentRole, IVault
@@ -27,13 +28,19 @@ class TriageAgent(BaseAgent):
     No tools - pure analysis of the log snippet + memory hints.
     """
 
-    def __init__(self, vault: IVault, llm: Any, gateway: AIGateway, audit_log=None):
+    def __init__(
+        self,
+        vault: IVault,
+        llm: Any,
+        gateway: AIGateway,
+        audit_log: ImmutableAuditLog | None = None,
+    ) -> None:
         super().__init__(vault, AgentRole.TRIAGE, gateway, audit_log=audit_log, llm=llm)
 
     async def run(
-        self, incident: Incident, memory_hints: list[dict] | None = None,
+        self, incident: Incident, memory_hints: list[dict[str, Any]] | None = None,
         service_context: str = "",
-    ) -> dict:
+    ) -> dict[str, Any]:
         """
         Classify the incident.
         Returns: {"severity": str, "verdict": str, "summary": str,
@@ -85,7 +92,7 @@ class TriageAgent(BaseAgent):
         finally:
             self._vault.revoke_credential(cred.credential_id)
 
-    def _parse_using_schema(self, text: str) -> dict:
+    def _parse_using_schema(self, text: str) -> dict[str, Any]:
         """Parse using the canonical TriageResult schema (single source of truth)."""
         from backend.orchestrator.schemas import TriageResult
         triage = TriageResult.parse_safe(text)

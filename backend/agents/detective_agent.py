@@ -15,6 +15,7 @@ from typing import Any
 from backend.agents.base_agent import BaseAgent
 from backend.shared.agent_throttle import AgentThrottle
 from backend.shared.ai_gateway import AIGateway
+from backend.shared.audit_log import ImmutableAuditLog
 from backend.shared.models import Incident
 from backend.shared.prompts import DIAGNOSIS_SYSTEM_PROMPT as DETECTIVE_SYSTEM_PROMPT
 from backend.shared.tool_registry import TrustedToolRegistry
@@ -39,14 +40,14 @@ class DetectiveAgent(BaseAgent):
         registry: TrustedToolRegistry,
         gateway: AIGateway,
         throttle: AgentThrottle,
-        audit_log=None,
-    ):
+        audit_log: ImmutableAuditLog | None = None,
+    ) -> None:
         super().__init__(vault, AgentRole.DETECTIVE, gateway, audit_log=audit_log,
                          llm=llm, tools=tools)
         self._registry = registry
         self._throttle = throttle
 
-    async def run(self, incident: Incident, service_context: str = "") -> dict:
+    async def run(self, incident: Incident, service_context: str = "") -> dict[str, Any]:
         """
         Investigate incident root cause.
         Returns: {"root_cause": str, "recommended_fix": str, "tool_results": list,
@@ -153,7 +154,7 @@ class DetectiveAgent(BaseAgent):
         finally:
             self._vault.revoke_credential(cred.credential_id)
 
-    def _parse_using_schema(self, text: str) -> dict:
+    def _parse_using_schema(self, text: str) -> dict[str, Any]:
         """Parse using the canonical DiagnosisResult schema (single source of truth)."""
         from backend.orchestrator.schemas import DiagnosisResult
         diagnosis = DiagnosisResult.parse_safe(text)
