@@ -9,7 +9,7 @@ Uses LangGraph's StateGraph for ordered, deterministic state transitions:
 import logging
 import os
 from datetime import UTC
-from typing import Literal, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
 
 from langgraph.graph import END, StateGraph
 
@@ -19,6 +19,9 @@ from backend.agents.surgeon_agent import SurgeonAgent
 # Agent imports for Zero Trust delegation
 from backend.agents.triage_agent import TriageAgent
 from backend.agents.validator_agent import ValidatorAgent
+from backend.shared.agent_throttle import AgentThrottle
+from backend.shared.ai_gateway import AIGateway
+from backend.shared.audit_log import ImmutableAuditLog
 from backend.shared.circuit_breaker import CostCircuitBreaker
 from backend.shared.config import AppConfig
 from backend.shared.interfaces import ILLMClient, IMemoryStore, IToolExecutor
@@ -28,6 +31,11 @@ from backend.shared.models import (
     IncidentSeverity,
     IncidentState,
 )
+from backend.shared.tool_registry import TrustedToolRegistry
+from backend.shared.vault import IVault
+
+if TYPE_CHECKING:
+    from langgraph.graph.state import CompiledStateGraph
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +48,11 @@ class IncidentGraphState(TypedDict, total=False):
     """State that flows through the LangGraph nodes."""
     incident: Incident
     service_context: str  # Rich service awareness context injected from ServiceRegistry
-    triage: dict          # TriageResult as dict
-    diagnosis: dict       # DiagnosisResult as dict
-    remediation: dict     # RemediationResult as dict
-    verification: dict    # VerificationResult as dict
-    tool_results: list    # Accumulated tool call results
+    triage: dict[str, Any]          # TriageResult as dict
+    diagnosis: dict[str, Any]       # DiagnosisResult as dict
+    remediation: dict[str, Any]     # RemediationResult as dict
+    verification: dict[str, Any]    # VerificationResult as dict
+    tool_results: list[str]         # Accumulated tool call results
     tool_loop_count: int  # How many diagnosis tool loops we've done
     error: str            # Error message if any node fails
 
@@ -69,12 +77,12 @@ class IncidentGraphBuilder:
         tools: IToolExecutor,
         memory: IMemoryStore,
         circuit_breaker: CostCircuitBreaker,
-        vault=None,
-        gateway=None,
-        audit_log=None,
-        throttle=None,
-        registry=None,
-    ):
+        vault: IVault | None = None,
+        gateway: AIGateway | None = None,
+        audit_log: ImmutableAuditLog | None = None,
+        throttle: AgentThrottle | None = None,
+        registry: TrustedToolRegistry | None = None,
+    ) -> None:
         self._config = config
         self._llm = llm
         self._tools = tools
@@ -87,7 +95,7 @@ class IncidentGraphBuilder:
         self._throttle = throttle
         self._registry = registry
 
-    def build(self):
+    def build(self) -> "CompiledStateGraph[Any, Any, Any, Any]":
         """Build and compile the LangGraph StateGraph."""
         graph = StateGraph(IncidentGraphState)
 
@@ -146,10 +154,16 @@ class IncidentGraphBuilder:
             memory_hints = [{"symptom": h.symptom, "root_cause": h.root_cause} for h in relevant] if relevant else None
 
             # ── Delegate to TriageAgent (Zero Trust secured) ──
+            # ``vault`` / ``gateway`` are typed ``Optional[...]`` on the
+            # builder because unit-test fixtures instantiate it with
+            # ``None``; in production they are always wired. Cast so
+            # strict mypy accepts the non-Optional agent signature.
             incident.current_agent_action = "Calling TriageAgent (secured)..."
             agent = TriageAgent(
-                vault=self._vault, llm=self._llm,
-                gateway=self._gateway, audit_log=self._audit_log,
+                vault=cast(IVault, self._vault),
+                llm=self._llm,
+                gateway=cast(AIGateway, self._gateway),
+                audit_log=self._audit_log,
             )
             result = await agent.run(incident, memory_hints=memory_hints, service_context=service_context)
             self._track_cost(result)
@@ -226,11 +240,16 @@ class IncidentGraphBuilder:
             service_context = state.get("service_context", "")
 
             # ── Delegate to DetectiveAgent (Zero Trust secured) ──
+            # See TriageAgent instantiation for the ``cast(...)`` rationale.
             incident.current_agent_action = "Calling DetectiveAgent (secured)..."
             agent = DetectiveAgent(
-                vault=self._vault, llm=self._llm, tools=self._tools,
-                registry=self._registry, gateway=self._gateway,
-                throttle=self._throttle, audit_log=self._audit_log,
+                vault=cast(IVault, self._vault),
+                llm=self._llm,
+                tools=self._tools,
+                registry=cast(TrustedToolRegistry, self._registry),
+                gateway=cast(AIGateway, self._gateway),
+                throttle=cast(AgentThrottle, self._throttle),
+                audit_log=self._audit_log,
             )
             result = await agent.run(incident, service_context=service_context)
             self._track_cost(result)
@@ -287,11 +306,16 @@ class IncidentGraphBuilder:
             tool_results = state.get("tool_results", [])
 
             # ── Delegate to SurgeonAgent (Zero Trust secured) ──
+            # See TriageAgent instantiation for the ``cast(...)`` rationale.
             incident.current_agent_action = "Calling SurgeonAgent (secured)..."
             agent = SurgeonAgent(
-                vault=self._vault, llm=self._llm, tools=self._tools,
-                registry=self._registry, gateway=self._gateway,
-                throttle=self._throttle, config=self._config,
+                vault=cast(IVault, self._vault),
+                llm=self._llm,
+                tools=self._tools,
+                registry=cast(TrustedToolRegistry, self._registry),
+                gateway=cast(AIGateway, self._gateway),
+                throttle=cast(AgentThrottle, self._throttle),
+                config=self._config,
                 audit_log=self._audit_log,
             )
             result = await agent.run(incident, tool_results_context=tool_results)
@@ -348,10 +372,13 @@ class IncidentGraphBuilder:
 
         try:
             # ── Delegate to ValidatorAgent (Zero Trust secured) ──
+            # See TriageAgent instantiation for the ``cast(...)`` rationale.
             incident.current_agent_action = "Calling ValidatorAgent (secured)..."
             agent = ValidatorAgent(
-                vault=self._vault, llm=self._llm,
-                gateway=self._gateway, audit_log=self._audit_log,
+                vault=cast(IVault, self._vault),
+                llm=self._llm,
+                gateway=cast(AIGateway, self._gateway),
+                audit_log=self._audit_log,
             )
             result = await agent.run(incident)
             self._track_cost(result)
@@ -419,7 +446,9 @@ class IncidentGraphBuilder:
 
     # ── Helpers ──────────────────────────────────────────
 
-    def _apply_agent_activities(self, incident: Incident, result: dict, phase: str):
+    def _apply_agent_activities(
+        self, incident: Incident, result: dict[str, Any], phase: str
+    ) -> None:
         """Apply activity entries returned by an agent to the incident.
 
         Agents collect activities via BaseAgent._log_activity() during run().
@@ -439,7 +468,7 @@ class IncidentGraphBuilder:
                 metadata=activity.get("metadata"),
             )
 
-    def _track_cost(self, response: dict) -> None:
+    def _track_cost(self, response: dict[str, Any]) -> None:
         self._cb.record_usage(
             response.get("input_tokens", 0),
             response.get("output_tokens", 0),

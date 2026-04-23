@@ -12,6 +12,8 @@ Production hardening:
 import asyncio
 import json
 import logging
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any
 
 import anthropic
 
@@ -22,6 +24,9 @@ from backend.shared.config import (
     LLMProvider,
 )
 from backend.shared.interfaces import ILLMClient
+
+if TYPE_CHECKING:
+    from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +52,10 @@ def _is_transient_error(error: Exception) -> bool:
     return any(keyword in error_str for keyword in _TRANSIENT_ERROR_KEYWORDS)
 
 
-async def _retry_with_backoff(coro_factory, operation_name: str) -> dict:
+async def _retry_with_backoff(
+    coro_factory: Callable[[], Awaitable[dict[str, Any]]],
+    operation_name: str,
+) -> dict[str, Any]:
     """
     Execute an async operation with timeout + exponential backoff retry.
 
@@ -59,10 +67,10 @@ async def _retry_with_backoff(coro_factory, operation_name: str) -> dict:
     Returns:
         The result dict from the coroutine, or an error dict on final failure.
     """
-    last_error = None
+    last_error: BaseException | None = None
     for attempt in range(1, LLM_MAX_RETRIES + 1):
         try:
-            result = await asyncio.wait_for(
+            result: dict[str, Any] = await asyncio.wait_for(
                 coro_factory(),
                 timeout=LLM_CALL_TIMEOUT_SECONDS,
             )
@@ -113,7 +121,7 @@ def _effort_to_budget(effort: str) -> int:
     return budgets.get(effort, 2048)
 
 
-def _no_api_key_response() -> dict:
+def _no_api_key_response() -> dict[str, Any]:
     """Standard response when no API key is configured."""
     return {
         "text": (
@@ -145,13 +153,13 @@ class OpusLLMClient(ILLMClient):
         self,
         prompt: str,
         effort: str = "low",
-        tools: list | None = None,
-    ) -> dict:
+        tools: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         if not self._config.api_key or self._config.api_key.startswith("sk-ant-your"):
             logger.warning("No valid API key - returning simulated escalation response")
             return _no_api_key_response()
 
-        kwargs = {
+        kwargs: dict[str, Any] = {
             "model": self._config.model,
             "max_tokens": self._config.max_tokens,
             "messages": [{"role": "user", "content": prompt}],
@@ -172,7 +180,7 @@ class OpusLLMClient(ILLMClient):
             "Anthropic API call",
         )
 
-    async def _raw_call(self, kwargs: dict) -> dict:
+    async def _raw_call(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         """Single Anthropic API call attempt (used by retry wrapper)."""
         try:
             response = await self._client.messages.create(**kwargs)
@@ -187,9 +195,9 @@ class OpusLLMClient(ILLMClient):
         self._total_output += usage.output_tokens
         return self._parse_response(response, usage)
 
-    def _parse_response(self, response, usage) -> dict:
-        text_parts = []
-        tool_calls = []
+    def _parse_response(self, response: Any, usage: Any) -> dict[str, Any]:
+        text_parts: list[str] = []
+        tool_calls: list[dict[str, Any]] = []
         thinking = ""
         for block in response.content:
             if block.type == "text":
@@ -207,7 +215,7 @@ class OpusLLMClient(ILLMClient):
             "error": None,
         }
 
-    async def get_usage(self) -> dict:
+    async def get_usage(self) -> dict[str, Any]:
         return {"total_input_tokens": self._total_input, "total_output_tokens": self._total_output}
 
 
@@ -226,11 +234,12 @@ class BedrockGatewayLLMClient(ILLMClient):
 
     def __init__(self, config: BedrockGatewayConfig):
         self._config = config
-        self._client = None  # Created lazily on first API call
+        # Created lazily on first API call (``openai`` is an optional dep).
+        self._client: AsyncOpenAI | None = None
         self._total_input = 0
         self._total_output = 0
 
-    def _get_client(self):
+    def _get_client(self) -> "AsyncOpenAI":
         """Lazy-create the AsyncOpenAI client on first use.
 
         This avoids creating async resources that trigger
@@ -239,13 +248,13 @@ class BedrockGatewayLLMClient(ILLMClient):
         """
         if self._client is None:
             try:
-                from openai import AsyncOpenAI
+                from openai import AsyncOpenAI as _AsyncOpenAI
             except ImportError as exc:
                 raise ImportError(
                     "The 'openai' package is required for Bedrock Gateway support. "
                     "Install it with: pip install openai>=1.30.0"
                 ) from exc
-            self._client = AsyncOpenAI(
+            self._client = _AsyncOpenAI(
                 api_key=self._config.api_key,
                 base_url=self._config.base_url,
             )
@@ -255,13 +264,13 @@ class BedrockGatewayLLMClient(ILLMClient):
         self,
         prompt: str,
         effort: str = "low",
-        tools: list | None = None,
-    ) -> dict:
+        tools: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         if not self._config.api_key or not self._config.base_url:
             logger.warning("Bedrock Gateway not configured - returning simulated escalation")
             return _no_api_key_response()
 
-        messages = [{"role": "user", "content": prompt}]
+        messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
 
         # Build system prompt with effort hint so the model adapts depth
         system_prompt = (
@@ -270,7 +279,7 @@ class BedrockGatewayLLMClient(ILLMClient):
             f"If effort is 'low', be concise. If 'high', think deeply and explore all angles."
         )
 
-        kwargs: dict = {
+        kwargs: dict[str, Any] = {
             "model": self._config.model,
             "max_tokens": self._config.max_tokens,
             "messages": [{"role": "system", "content": system_prompt}, *messages],
@@ -285,13 +294,15 @@ class BedrockGatewayLLMClient(ILLMClient):
             "Bedrock Gateway API call",
         )
 
-    async def _raw_call(self, kwargs: dict) -> dict:
+    async def _raw_call(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         """Single Bedrock Gateway API call attempt (used by retry wrapper)."""
         client = self._get_client()
         response = await client.chat.completions.create(**kwargs)
         return self._parse_response(response)
 
-    def _convert_tools(self, anthropic_tools: list) -> list:
+    def _convert_tools(
+        self, anthropic_tools: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """
         Convert Anthropic tool definitions to OpenAI function-calling format.
 
@@ -300,7 +311,7 @@ class BedrockGatewayLLMClient(ILLMClient):
         OpenAI format:
             {"type": "function", "function": {"name": "...", "description": "...", "parameters": {...}}}
         """
-        openai_tools = []
+        openai_tools: list[dict[str, Any]] = []
         for tool in anthropic_tools:
             openai_tools.append({
                 "type": "function",
@@ -312,7 +323,7 @@ class BedrockGatewayLLMClient(ILLMClient):
             })
         return openai_tools
 
-    def _parse_response(self, response) -> dict:
+    def _parse_response(self, response: Any) -> dict[str, Any]:
         """Parse OpenAI-format response into our standard dict."""
         choice = response.choices[0] if response.choices else None
         if not choice:
@@ -321,7 +332,7 @@ class BedrockGatewayLLMClient(ILLMClient):
         message = choice.message
         text = message.content or ""
 
-        tool_calls = []
+        tool_calls: list[dict[str, Any]] = []
         if message.tool_calls:
             for tc in message.tool_calls:
                 try:
@@ -350,7 +361,7 @@ class BedrockGatewayLLMClient(ILLMClient):
             "error": None,
         }
 
-    async def get_usage(self) -> dict:
+    async def get_usage(self) -> dict[str, Any]:
         return {"total_input_tokens": self._total_input, "total_output_tokens": self._total_output}
 
 

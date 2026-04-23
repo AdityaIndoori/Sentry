@@ -11,13 +11,14 @@ Provider-agnostic 3-tier validation strategy:
 import json
 import logging
 import re
+from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
 
 logger = logging.getLogger(__name__)
 
 
-def _try_extract_json(text: str) -> dict | None:
+def _try_extract_json(text: str) -> dict[str, Any] | None:
     """
     Attempt to extract a JSON object from LLM text output.
 

@@ -32,6 +32,8 @@ from typing import Any
 
 from backend.orchestrator.graph import IncidentGraphBuilder, IncidentGraphState
 from backend.services.registry import ServiceRegistry
+from backend.shared.agent_throttle import AgentThrottle
+from backend.shared.ai_gateway import AIGateway
 from backend.shared.audit_log import ImmutableAuditLog
 from backend.shared.circuit_breaker import CostCircuitBreaker
 from backend.shared.config import AppConfig
@@ -44,6 +46,8 @@ from backend.shared.models import (
     MemoryEntry,
 )
 from backend.shared.observability import get_telemetry
+from backend.shared.tool_registry import TrustedToolRegistry
+from backend.shared.vault import IVault
 
 logger = logging.getLogger(__name__)
 
@@ -73,16 +77,16 @@ class Orchestrator(IOrchestrator):
         memory: IMemoryStore,
         circuit_breaker: CostCircuitBreaker,
         audit_log: ImmutableAuditLog | None = None,
-        vault=None,
-        gateway=None,
-        throttle=None,
-        registry=None,
+        vault: IVault | None = None,
+        gateway: AIGateway | None = None,
+        throttle: AgentThrottle | None = None,
+        registry: TrustedToolRegistry | None = None,
         *,
         incident_repo: Any | None = None,  # IncidentRepository; optional keyword
         orchestrator_timeout_seconds: int = DEFAULT_ORCH_TIMEOUT_SECONDS,
         dedup_window_seconds: int = DEFAULT_DEDUP_WINDOW_SECONDS,
         broadcaster: Any | None = None,  # P2.4: IncidentBroadcaster; optional
-    ):
+    ) -> None:
         self._config = config
         self._llm = llm
         self._tools = tools
@@ -112,7 +116,13 @@ class Orchestrator(IOrchestrator):
         self._service_registry = ServiceRegistry(config)
         if self._service_registry.has_context():
             fingerprint = self._service_registry.build_fingerprint()
-            memory.system_fingerprint = fingerprint
+            # ``IMemoryStore`` doesn't declare ``system_fingerprint`` on the
+            # ABC because only one implementer (the Postgres-backed repo
+            # via ``PostgresMemoryRepo``) supports it. Adding it to the ABC
+            # would force every fake / in-memory test double to implement
+            # it too. Use ``setattr`` so strict mypy doesn't flag the
+            # attribute access while runtime duck-typing is preserved.
+            setattr(memory, "system_fingerprint", fingerprint)  # noqa: B010
             logger.info(f"System fingerprint: {fingerprint}")
         else:
             logger.warning("No service context configured — agents will operate without service awareness")
@@ -190,9 +200,10 @@ class Orchestrator(IOrchestrator):
         # authoritative across process restarts.
         if self._incident_repo is not None:
             try:
-                return await self._incident_repo.dedupe_fingerprint(
+                result = await self._incident_repo.dedupe_fingerprint(
                     fingerprint, window_seconds=self._dedup_window
                 )
+                return bool(result)
             except Exception:  # pragma: no cover
                 logger.exception("dedup: incident_repo.dedupe_fingerprint failed")
                 return False
@@ -384,7 +395,7 @@ class Orchestrator(IOrchestrator):
     async def get_active_incidents(self) -> list[Incident]:
         return list(self._active_incidents.values())
 
-    async def get_status(self) -> dict:
+    async def get_status(self) -> dict[str, Any]:
         return {
             "active_incidents": len(self._active_incidents),
             "resolved_total": len(self._resolved_incidents),

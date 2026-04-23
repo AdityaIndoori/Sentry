@@ -199,7 +199,7 @@ feature in P1–P3 adds rows here.
 
 ---
 
-## Test Scoreboard (as of P4.1 + P4.2 + P4.3 + P4.4 + P4.5 + P4.6 + P4.7a + P4.7b + P4.8 + P4.9a + P4.9b)
+## Test Scoreboard (as of P4.1 + P4.2 + P4.3 + P4.4 + P4.5 + P4.6 + P4.7a + P4.7b + P4.8 + P4.9a + P4.9b + P4.9c)
 
 
 
@@ -235,6 +235,78 @@ Combined unit + E2E: **724 passed / 11 skipped / 1 xfailed / 0 failed**.
 | **P4.8 (SEC-30: audit_log DB append-only triggers)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (+6 unit, +2 Postgres-gated skips) |
 | **P4.9a (close the P4.7c generics gap in agents + tools)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (no new tests — generics / annotation tightening) |
 | **P4.9b (persistence.repositories generics sweep + promote)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (no new tests — generics / annotation tightening) |
+| **P4.9c (retire backend.orchestrator.* override + promote)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (no new tests — type-system tightening) |
+
+### P4.9c delta (retire ``backend.orchestrator.*`` override + strict-islands promote)
+
+Third slice of the CI-hardening sweep. The
+``backend.orchestrator.*`` override block — the oldest remaining
+relaxer — is now retired. The four orchestrator modules
+(``engine.py``, ``graph.py``, ``llm_client.py``, ``schemas.py``)
+are strict-islands clean.
+
+**Fixes:**
+
+* ``backend/orchestrator/llm_client.py``: widened
+  ``last_error: BaseException | None`` in ``_retry_with_backoff``
+  (was ``TimeoutError | None``, couldn't hold a generic ``Exception``
+  from the transient-error path); typed the lazy ``AsyncOpenAI``
+  client as ``self._client: AsyncOpenAI | None`` with a
+  ``TYPE_CHECKING``-only import to keep ``openai`` an optional
+  runtime dependency; added ``_get_client() -> "AsyncOpenAI"`` return
+  type; parameterised every ``dict``/``list`` return + Pydantic-style
+  ``list[dict[str, Any]]`` for tool definitions; typed
+  ``_parse_response`` / ``_convert_tools`` / ``_raw_call`` signatures;
+  added ``Callable[[], Awaitable[dict[str, Any]]]`` type for
+  ``_retry_with_backoff``'s ``coro_factory`` arg.
+* ``backend/orchestrator/engine.py``: typed the ``vault`` /
+  ``gateway`` / ``throttle`` / ``registry`` kwargs as their proper
+  ``IVault | None`` / ``AIGateway | None`` / ``AgentThrottle | None``
+  / ``TrustedToolRegistry | None`` shapes (they were ``=None``
+  without a type); added ``-> None`` on ``__init__``; returned
+  ``dict[str, Any]`` from ``get_status``; wrapped the dedup-repo
+  result in ``bool(...)`` so mypy's ``warn_return_any`` is satisfied.
+  **Attribute-typing workaround**: ``memory.system_fingerprint = fp``
+  became ``setattr(memory, "system_fingerprint", fp)`` because the
+  ``IMemoryStore`` ABC intentionally doesn't declare the attribute
+  (only ``PostgresMemoryRepo`` supports it; forcing every test double
+  to implement it would be disruptive). Documented the rationale
+  inline.
+* ``backend/orchestrator/graph.py``: typed every
+  ``IncidentGraphState`` field (``triage: dict[str, Any]``, ...,
+  ``tool_results: list[str]``); typed the ``IncidentGraphBuilder``
+  constructor params (``vault: IVault | None`` etc.); declared
+  ``build() -> CompiledStateGraph[Any, Any, Any, Any]`` (imported
+  under ``TYPE_CHECKING``); typed ``_apply_agent_activities`` /
+  ``_track_cost`` signatures. **Cast rationale**: agents take
+  non-Optional ``vault`` / ``gateway`` / ``registry`` / ``throttle``
+  but the builder receives them optional because unit-test fixtures
+  pass ``None``; the four node bodies therefore ``cast(...)`` on
+  instantiation, which matches the existing runtime behaviour (if
+  those deps are ``None`` in production you get an ``AttributeError``
+  on first use, not a new failure mode).
+* ``backend/orchestrator/schemas.py``: typed
+  ``_try_extract_json(text: str) -> dict[str, Any] | None``.
+
+**pyproject.toml:**
+
+* Retired the ``backend.orchestrator.*`` override block. The
+  strict-islands list gains four new entries for each of the
+  orchestrator modules. Total strict-islands: 31 → 35.
+* Remaining relaxing overrides: ``backend.api.app``/routes and
+  ``backend.shared.*`` (legacy). Two ``ignore_errors`` overrides for
+  ``migrations`` / ``tests`` stay.
+
+**Verification:**
+
+* ``python -m mypy backend/orchestrator/ --ignore-missing-imports``
+  → 0 errors in 5 source files.
+* ``python -m ruff check backend/orchestrator/`` → clean (one
+  self-reported F401 for a leftover ``cast`` import was removed).
+* Full suite: **724 passed / 11 skipped / 1 xfailed / 0 failed**.
+* Backend-wide mypy error count: **83 → 16** after P4.9a + P4.9b +
+  P4.9c (remaining: ``shared/factory`` (3) + ``api/app`` (13) —
+  each queued for its own sub-slice).
 
 ### P4.9b delta (``backend.persistence.repositories.*`` generics sweep + strict-islands promote)
 
