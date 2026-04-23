@@ -285,6 +285,12 @@ class LogWatcher(ILogWatcher):
                 )
                 try:
                     self._event_queue.put_nowait(event)
+                    # P2.3b-full: Prometheus counter for watcher-originated events.
+                    try:
+                        from backend.shared.metrics import inc_watcher_event
+                        inc_watcher_event()
+                    except Exception:  # pragma: no cover
+                        pass
                 except asyncio.QueueFull:
                     logger.warning("Event queue full, dropping event")
                 return  # One match per line

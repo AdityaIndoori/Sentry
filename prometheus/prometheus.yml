@@ -1,0 +1,32 @@
+# P2.3b-full — Prometheus scrape config for the Sentry stack.
+#
+# Two scrape targets by default:
+#   * the backend itself (the FastAPI /metrics endpoint)
+#   * Prometheus' own /metrics (built-in self-observability)
+#
+# The OTel collector's /metrics endpoint is also scraped when the
+# ``observability`` profile is active so we can see pipeline throughput
+# + dropped-span counters.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 30s
+  external_labels:
+    environment: "${ENVIRONMENT:-development}"
+    service: sentry
+
+scrape_configs:
+  - job_name: sentry-backend
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["backend:8000"]
+
+  - job_name: prometheus
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: otel-collector
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["otel-collector:8888"]

@@ -253,6 +253,23 @@ def create_app(container: Optional[ServiceContainer] = None) -> FastAPI:
     app.add_middleware(AuthMiddleware)
     app.add_middleware(RequestIDMiddleware)
 
+    # ── P2.3b-full: initialise OTel + structlog once per process ────
+    #
+    # Both functions are idempotent + safe: if the optional deps aren't
+    # installed they become no-ops. Keeping them here (rather than in
+    # the lifespan) means standalone test clients that don't run the
+    # lifespan still see configured logging.
+    try:
+        from backend.shared.logging_config import configure_logging
+        from backend.shared.observability import init_telemetry
+
+        settings = getattr(getattr(app.state, "container", None), "settings", None)
+        if settings is not None:
+            configure_logging(level=getattr(settings, "log_level", "INFO"))
+            init_telemetry(settings, app=app)
+    except Exception:  # pragma: no cover — never block app creation
+        pass
+
     _register_routes(app)
     return app
 

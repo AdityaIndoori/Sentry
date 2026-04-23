@@ -1,0 +1,95 @@
+{
+  "title": "Sentry — OSS Overview",
+  "uid": "sentry-overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "15s",
+  "time": { "from": "now-1h", "to": "now" },
+  "tags": ["sentry", "observability"],
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Incidents (resolved)",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "sentry-prometheus" },
+      "targets": [
+        { "expr": "sum(increase(sentry_incidents_total{state=\"resolved\"}[1h]))", "refId": "A" }
+      ],
+      "options": { "colorMode": "value", "graphMode": "area" }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Incidents (escalated)",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "sentry-prometheus" },
+      "targets": [
+        { "expr": "sum(increase(sentry_incidents_total{state=\"escalated\"}[1h]))", "refId": "A" }
+      ],
+      "options": { "colorMode": "value", "graphMode": "area" }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Circuit breaker trips",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "sentry-prometheus" },
+      "targets": [
+        { "expr": "sum(increase(sentry_circuit_breaker_trips_total[1h]))", "refId": "A" }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "LLM cost ($ last 1h)",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "sentry-prometheus" },
+      "targets": [
+        { "expr": "sum(increase(sentry_llm_cost_usd_total[1h]))", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" } }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Incident outcomes / minute",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "sentry-prometheus" },
+      "targets": [
+        { "expr": "sum by (state) (rate(sentry_incidents_total[1m]))", "refId": "A", "legendFormat": "{{state}}" }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Tool calls / minute (by outcome)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "sentry-prometheus" },
+      "targets": [
+        { "expr": "sum by (tool, success) (rate(sentry_tool_calls_total[1m]))", "refId": "A", "legendFormat": "{{tool}} / {{success}}" }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "LLM calls / minute",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "sentry-prometheus" },
+      "targets": [
+        { "expr": "rate(sentry_llm_calls_total[1m])", "refId": "A", "legendFormat": "calls/min" }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Watcher events / minute",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "sentry-prometheus" },
+      "targets": [
+        { "expr": "rate(sentry_watcher_events_total[1m])", "refId": "A", "legendFormat": "events/min" }
+      ]
+    }
+  ]
+}

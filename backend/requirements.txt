@@ -26,6 +26,20 @@ langchain-core>=0.3.0
 # dev machines without the full production toolchain stay green.
 prometheus-client>=0.20,<0.22
 
+# P2.3b-full — OpenTelemetry SDK + instrumentation + structlog.
+#
+# All optional at import time: backend.shared.observability and
+# backend.shared.logging_config degrade to no-ops when these are not
+# installed. Production Docker images pull them in via this file;
+# pytest dev envs may pip-install only the core requirements.
+opentelemetry-api>=1.26,<2
+opentelemetry-sdk>=1.26,<2
+opentelemetry-exporter-otlp-proto-grpc>=1.26,<2
+opentelemetry-instrumentation-fastapi>=0.47b0,<1
+opentelemetry-instrumentation-httpx>=0.47b0,<1
+opentelemetry-instrumentation-asyncpg>=0.47b0,<1
+structlog>=24.1,<26
+
 # Testing
 pytest==8.3.0
 pytest-asyncio==0.24.0

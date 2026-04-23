@@ -18,6 +18,8 @@ from typing import Any, Optional
 from backend.shared.vault import AgentRole, LocalVault, NonHumanIdentity, IVault
 from backend.shared.ai_gateway import AIGateway
 from backend.shared.audit_log import ImmutableAuditLog
+from backend.shared.metrics import inc_llm_call, inc_tool_call, observe_llm_cost
+from backend.shared.observability import get_telemetry
 from backend.shared.models import ToolCall, ToolResult
 from backend.shared.security import SecurityGuard
 
@@ -96,11 +98,32 @@ class BaseAgent(ABC):
             f"Calling LLM (effort: {effort}, call #{self._call_count})",
             metadata={"effort": effort, "call_number": self._call_count},
         )
+        # P2.3b-full: Prometheus counter for every LLM call dispatched.
+        try:
+            inc_llm_call()
+        except Exception:  # pragma: no cover
+            logger.exception("metrics: inc_llm_call failed")
 
-        response = await self.__llm.analyze(prompt=prompt, effort=effort, tools=tools)
+        # P2.3b-full: open an OTel span scoped to the LLM round-trip.
+        with get_telemetry().span(
+            "agent.llm_call",
+            agent=self._role.value,
+            effort=effort,
+            call_number=self._call_count,
+        ):
+            response = await self.__llm.analyze(prompt=prompt, effort=effort, tools=tools)
 
         input_tokens = response.get("input_tokens", 0)
         output_tokens = response.get("output_tokens", 0)
+        # Observe cost if the LLM client propagated a usd estimate; many
+        # providers don't, in which case this is a no-op.
+        try:
+            cost_usd = response.get("cost_usd") or response.get("usage", {}).get("cost_usd", 0)
+            if cost_usd:
+                observe_llm_cost(float(cost_usd))
+        except Exception:  # pragma: no cover
+            logger.exception("metrics: observe_llm_cost failed")
+
         self._log_activity(
             "INFO",
             "LLM response received",
@@ -151,9 +174,15 @@ class BaseAgent(ABC):
 
         try:
             call = ToolCall(tool_name=tool_name, arguments=arguments)
-            result = await self.__tools.execute(
-                call, caller_role=self._role, credential=credential,
-            )
+            # P2.3b-full: OTel span for each tool execution.
+            with get_telemetry().span(
+                "agent.tool_call",
+                agent=self._role.value,
+                tool=tool_name,
+            ):
+                result = await self.__tools.execute(
+                    call, caller_role=self._role, credential=credential,
+                )
         finally:
             if credential is not None:
                 try:
@@ -171,6 +200,11 @@ class BaseAgent(ABC):
             detail=result_text[:300],
             metadata={"success": result.success, "audit_only": getattr(result, 'audit_only', False)},
         )
+        # P2.3b-full: Prometheus counter for tool outcomes.
+        try:
+            inc_tool_call(tool_name, bool(result.success))
+        except Exception:  # pragma: no cover
+            logger.exception("metrics: inc_tool_call failed")
         return result
 
     def _get_tool_definitions(self, category: str = "all") -> list:

@@ -135,6 +135,86 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ── P2.3b-full: observability sidecars ───────────────────────────────
+  #
+  # All three services are behind the ``observability`` compose profile
+  # so they do NOT start with ``docker compose up`` by default. Operators
+  # who want the full metrics + tracing stack run:
+  #
+  #     docker compose --profile observability up
+  #
+  # Prometheus scrapes the backend's /metrics endpoint every 15 s. The
+  # OTel collector receives OTLP/gRPC spans on :4317 and logs them to
+  # stdout (optionally forward to Tempo/Loki — commented in
+  # ``docker/otel-collector-config.yaml``). Grafana provisions a
+  # pre-built "Sentry" dashboard from ``grafana/provisioning/``.
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: sentry-prometheus
+    profiles: ["observability"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - sentry-prom-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  grafana:
+    image: grafana/grafana-oss:10.4.3
+    container_name: sentry-grafana
+    profiles: ["observability"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-sentry}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - sentry-grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.101.0
+    container_name: sentry-otel-collector
+    profiles: ["observability"]
+    command: ["--config=/etc/otel-collector.yaml"]
+    volumes:
+      - ./docker/otel-collector-config.yaml:/etc/otel-collector.yaml:ro
+    ports:
+      - "127.0.0.1:4317:4317"   # OTLP/gRPC
+      - "127.0.0.1:4318:4318"   # OTLP/HTTP
+      - "127.0.0.1:13133:13133" # health_check
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   sentry-data:
   # P0.2: Writable volume bound to /app/patchable inside the backend.
@@ -144,3 +224,7 @@ volumes:
   # P1.2: Postgres data volume. Delete this to wipe all persisted
   # incidents / memory / audit rows.
   sentry-postgres-data:
+  # P2.3b-full: Prometheus + Grafana data. Only created when the
+  # ``observability`` profile is active.
+  sentry-prom-data:
+  sentry-grafana-data:

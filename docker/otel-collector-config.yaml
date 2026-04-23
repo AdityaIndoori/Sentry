@@ -1,0 +1,63 @@
+# P2.3b-full — OpenTelemetry Collector (contrib) config.
+#
+# Receives OTLP spans + metrics from the Sentry backend on gRPC :4317
+# and HTTP :4318. By default it exports traces to stdout (``logging``
+# exporter) — easy to ``docker compose logs otel-collector`` for a
+# smoke test. The commented blocks show how to forward to Tempo / Loki
+# / Jaeger / Prometheus remote_write when you're ready to plumb in a
+# heavier backend.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    send_batch_size: 512
+    timeout: 5s
+  memory_limiter:
+    check_interval: 5s
+    limit_percentage: 80
+    spike_limit_percentage: 10
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+exporters:
+  debug:
+    verbosity: basic
+    sampling_initial: 2
+    sampling_thereafter: 500
+  # prometheus:
+  #   endpoint: 0.0.0.0:8889
+  #   namespace: sentry
+  # otlp/tempo:
+  #   endpoint: tempo:4317
+  #   tls:
+  #     insecure: true
+  # loki:
+  #   endpoint: http://loki:3100/loki/api/v1/push
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug]
+  telemetry:
+    metrics:
+      address: 0.0.0.0:8888

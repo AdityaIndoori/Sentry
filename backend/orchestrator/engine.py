@@ -40,6 +40,7 @@ from backend.shared.models import (
 from backend.orchestrator.graph import IncidentGraphBuilder, IncidentGraphState
 from backend.shared.audit_log import ImmutableAuditLog
 from backend.shared.metrics import inc_circuit_breaker_trip, inc_incident
+from backend.shared.observability import get_telemetry
 from backend.services.registry import ServiceRegistry
 
 logger = logging.getLogger(__name__)
@@ -213,6 +214,18 @@ class Orchestrator(IOrchestrator):
         * ``asyncio.wait_for`` around the graph guards against hung
           agents.
         """
+        # P2.3b-full: open a root span for the whole incident lifecycle.
+        # The actual body runs inside _handle_event_impl so the span
+        # scope covers every return path (including the dedup + cb
+        # short-circuits) without having to hand-wrap each one.
+        with get_telemetry().span(
+            "orchestrator.handle_event",
+            source=event.source_file or "",
+            pattern=event.matched_pattern or "",
+        ):
+            return await self._handle_event_impl(event)
+
+    async def _handle_event_impl(self, event: LogEvent) -> Optional[Incident]:
         if self._cb.is_tripped:
             logger.warning("Circuit breaker tripped - skipping event")
             inc_circuit_breaker_trip()

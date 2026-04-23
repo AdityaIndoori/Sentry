@@ -1,0 +1,17 @@
+# P2.3b-full — Grafana dashboard provider. Points at the bind-mounted
+# path inside the container (``/etc/grafana/provisioning/dashboards``)
+# and scans for ``*.json`` every 10 seconds so editors can drop new
+# dashboards without restarting Grafana.
+
+apiVersion: 1
+
+providers:
+  - name: "Sentry"
+    folder: "Sentry"
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

@@ -1,0 +1,18 @@
+# P2.3b-full — Grafana datasource auto-provisioning.
+# Grafana reads this on startup (bind-mounted read-only) and creates
+# the datasource without human clicks. The UID is stable so dashboard
+# panels can reference it by string without Grafana reassigning it.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: sentry-prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: "15s"
+      httpMethod: POST

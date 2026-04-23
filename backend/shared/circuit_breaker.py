@@ -43,16 +43,29 @@ class CostCircuitBreaker:
 
     def record_usage(self, input_tokens: int, output_tokens: int) -> None:
         """Record token usage and check if breaker should trip."""
+        incremental_cost = 0.0
         with self._lock:
             self._check_window_reset_locked()
+            prev_cost = self._tracker.estimated_cost_usd
             self._tracker.add_usage(input_tokens, output_tokens)
             cost = self._tracker.estimated_cost_usd
+            incremental_cost = max(0.0, cost - prev_cost)
             if cost >= self._max_cost:
                 self._tripped = True
                 logger.critical(
                     f"CIRCUIT BREAKER TRIPPED: ${cost:.2f} >= ${self._max_cost:.2f} "
                     f"in {self._window_minutes} min window"
                 )
+
+        # P2.3b-full: report the *increment* to the USD cost counter so
+        # Prometheus totals match the tracker's running cost. Done OUTSIDE
+        # the lock to avoid holding it during an external call.
+        if incremental_cost > 0:
+            try:
+                from backend.shared.metrics import observe_llm_cost
+                observe_llm_cost(incremental_cost)
+            except Exception:  # pragma: no cover
+                pass
 
     def reset(self) -> None:
         """Manual reset of the circuit breaker."""
