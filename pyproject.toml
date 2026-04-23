@@ -125,20 +125,22 @@ ignore_errors = true
 # modules (engine, graph, llm_client, schemas) pass strict-islands
 # ``mypy`` after the annotation + attribute-typing pass. Promoted to
 # strict-islands below.
-
-[[tool.mypy.overrides]]
-# ``backend.api.auth`` + ``backend.api.broadcaster`` are held to strict
-# mode via explicit inclusion below. Everything else under ``backend.api``
-# (app wiring, route handlers with FastAPI magic) is relaxed.
-module = [
-  "backend.api.app",
-  "backend.api.routes",
-  "backend.api.*.routes",
-]
-disallow_untyped_defs = false
-disallow_incomplete_defs = false
-disallow_any_generics = false
-warn_return_any = false
+#
+# P4.9e: retired the ``backend.api.app`` / ``backend.api.routes`` /
+# ``backend.api.*.routes`` override block. The 900-line ``app.py``
+# (globals, lifespan, middleware, ~20 route handlers, SSE streaming
+# response, watcher-event dispatch loop) is now fully annotated —
+# every handler has a return type (``dict[str, Any]`` for JSON
+# routes, ``Response`` for the metrics + SSE endpoints), every
+# ``dict`` / ``list`` literal has strict-mode-ready parameters, and
+# the nine module-level ``# type: ignore[var-annotated]`` escape
+# hatches on the legacy globals were replaced with explicit
+# ``Any | None`` annotations. Promoted to strict-islands below.
+#
+# No OpenAPI surface changes: type annotations on handler returns
+# are orthogonal to Pydantic ``response_model`` — the snapshot at
+# ``backend/frontend_contract/openapi_snapshot.json`` is unchanged
+# by this pass (verified via ``test_openapi_snapshot``).
 
 # P4.7b: retired ``backend.mcp_tools.*`` override — the package is an
 # empty shim (only ``__pycache__`` leftover from a historical move)
@@ -217,6 +219,9 @@ module = [
   "backend.orchestrator.graph",
   "backend.orchestrator.llm_client",
   "backend.orchestrator.schemas",
+  # P4.9e: retired the ``backend.api.app`` / ``backend.api.routes``
+  # override — the whole API gateway module is now strict-mode clean.
+  "backend.api.app",
 ]
 
 

@@ -32,14 +32,17 @@ import contextvars
 import logging
 import os
 import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from typing import Any, cast
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response as StarletteResponse
 
 from backend.api.auth import AuthMiddleware, require_scope
 from backend.shared.config import LLMProvider
@@ -60,7 +63,7 @@ _request_id_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("request_i
 class RequestIDFilter(logging.Filter):
     """Injects the current request ID into every log record."""
 
-    def filter(self, record):
+    def filter(self, record: logging.LogRecord) -> bool:
         record.request_id = _request_id_ctx.get("-")
         return True
 
@@ -68,7 +71,11 @@ class RequestIDFilter(logging.Filter):
 class RequestIDMiddleware(BaseHTTPMiddleware):
     """Generates a unique request ID, stores it in ContextVar, adds to response header."""
 
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Awaitable[StarletteResponse]],
+    ) -> StarletteResponse:
         request_id = uuid.uuid4().hex[:12]
         _request_id_ctx.set(request_id)
         response = await call_next(request)
@@ -87,15 +94,22 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
 #
 # TODO(P1.2): delete these globals once all tests move to the
 # container-based fixtures in ``backend.tests.e2e.conftest``.
-_orchestrator = None  # type: ignore[var-annotated]
-_watcher = None  # type: ignore[var-annotated]
-_config = None  # type: ignore[var-annotated]
-_vault = None  # type: ignore[var-annotated]
-_gateway = None  # type: ignore[var-annotated]
-_audit_log = None  # type: ignore[var-annotated]
-_throttle = None  # type: ignore[var-annotated]
-_registry = None  # type: ignore[var-annotated]
-_watcher_task: asyncio.Task | None = None
+#
+# P4.9e: these globals are intentionally ``Any | None`` — concrete
+# types live on the ``ServiceContainer`` which is the production
+# source of truth. Keeping them ``Any`` spares every ``_pick(...)``
+# call-site from having to re-narrow the return. The same rationale
+# applies to ``_get_container``'s ``request.app.state.container``
+# access (a starlette ``State`` attribute typed as ``Any``).
+_orchestrator: Any | None = None
+_watcher: Any | None = None
+_config: Any | None = None
+_vault: Any | None = None
+_gateway: Any | None = None
+_audit_log: Any | None = None
+_throttle: Any | None = None
+_registry: Any | None = None
+_watcher_task: asyncio.Task[None] | None = None
 _watcher_ctl_lock: asyncio.Lock = asyncio.Lock()
 
 
@@ -104,12 +118,12 @@ _watcher_ctl_lock: asyncio.Lock = asyncio.Lock()
 def _get_container(request: Request) -> ServiceContainer | None:
     """Return the ServiceContainer attached to this app, if any."""
     try:
-        return request.app.state.container  # type: ignore[union-attr]
+        return request.app.state.container  # type: ignore[no-any-return]
     except AttributeError:
         return None
 
 
-def _pick(request: Request, attr: str, global_name: str):
+def _pick(request: Request, attr: str, global_name: str) -> Any:
     """
     Pull ``attr`` off the container if one is attached; otherwise fall
     back to the module global ``global_name``. This is the only place
@@ -127,7 +141,7 @@ def _pick(request: Request, attr: str, global_name: str):
 # ─── Lifespan ───────────────────────────────────────────────────────────────
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):  # pragma: no cover
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # pragma: no cover
     """Application startup and shutdown.
 
     Builds a ServiceContainer via the factory, attaches it to
@@ -305,8 +319,8 @@ def _register_routes(app: FastAPI) -> None:
     # P2.3b: Prometheus /metrics endpoint
     # ──────────────────────────────────────────────────────────────
 
-    @app.get("/metrics")
-    async def metrics_endpoint():
+    @app.get("/metrics", response_model=None)
+    async def metrics_endpoint() -> Response:
         """Prometheus text-exposition endpoint.
 
         Open (no auth) — matches the ecosystem norm where a sidecar or
@@ -332,7 +346,7 @@ def _register_routes(app: FastAPI) -> None:
         return Response(content=body, media_type=content_type)
 
     @app.get("/api/health")
-    async def health():
+    async def health() -> dict[str, Any]:
 
         """Liveness probe — the process is alive enough to answer.
 
@@ -343,8 +357,16 @@ def _register_routes(app: FastAPI) -> None:
         """
         return {"status": "ok", "timestamp": datetime.now(UTC).isoformat()}
 
-    @app.get("/api/ready")
-    async def ready(request: Request):
+    # ``response_model=None`` keeps the OpenAPI surface identical to
+    # the pre-P4.9e state: without it FastAPI would try to coerce the
+    # ``Response | dict[str, Any]`` return annotation into a Pydantic
+    # response field, which (a) fails at import time because ``Response``
+    # is not a Pydantic-compatible type, and (b) would add a schema to
+    # ``components.schemas`` that the frozen OpenAPI snapshot doesn't
+    # expect. The annotation stays for strict-mypy; ``response_model=None``
+    # tells FastAPI "just use the raw return value as the body".
+    @app.get("/api/ready", response_model=None)
+    async def ready(request: Request) -> Response | dict[str, Any]:
         """Readiness probe — the backend is ready to serve real traffic.
 
         Checks each dependency that a "running" Sentry deployment needs:
@@ -414,7 +436,11 @@ def _register_routes(app: FastAPI) -> None:
                 disk_error = str(exc).splitlines()[0][:200]
 
         ready_flag = llm_reachable and db_reachable and disk_writable
-        payload = {
+        # P4.9e: explicit ``dict[str, Any]`` annotation — otherwise
+        # mypy infers ``dict[str, bool]`` from the first four entries
+        # and then rejects the two ``payload[...] = <str>`` branches
+        # for ``db_error`` / ``disk_error`` below.
+        payload: dict[str, Any] = {
             "ready": ready_flag,
             "llm_reachable": llm_reachable,
             "db_reachable": db_reachable,
@@ -435,9 +461,10 @@ def _register_routes(app: FastAPI) -> None:
 
     @app.get(
         "/api/stream/incidents",
+        response_model=None,
         dependencies=[Depends(require_scope("incidents:read"))],
     )
-    async def stream_incidents(request: Request):
+    async def stream_incidents(request: Request) -> Response:
         """Server-Sent Events feed of live incident state transitions.
 
         Every connected client receives one SSE message per incident
@@ -467,7 +494,7 @@ def _register_routes(app: FastAPI) -> None:
 
         HEARTBEAT_SECONDS = 15.0
 
-        async def event_stream():
+        async def event_stream() -> AsyncIterator[bytes]:
             # Subscribe inside the generator so the queue's lifetime is
             # tied to the response stream itself.
             async with broadcaster.subscribe() as queue:
@@ -529,20 +556,22 @@ def _register_routes(app: FastAPI) -> None:
         "/api/status",
         dependencies=[Depends(require_scope("incidents:read"))],
     )
-    async def get_status(request: Request):
+    async def get_status(request: Request) -> dict[str, Any]:
         orch = _pick(request, "orchestrator", "_orchestrator")
         watcher = _pick(request, "watcher", "_watcher")
         if not orch:
             raise HTTPException(503, "Orchestrator not initialized")
         status = await orch.get_status()
         status["watcher_running"] = watcher._running if watcher else False
-        return status
+        # mypy: ``orch`` is typed ``Any`` via ``_pick``'s legacy-global
+        # return contract; narrow back to dict for ``warn_return_any``.
+        return cast(dict[str, Any], status)
 
     @app.get(
         "/api/incidents",
         dependencies=[Depends(require_scope("incidents:read"))],
     )
-    async def get_incidents(request: Request):
+    async def get_incidents(request: Request) -> dict[str, Any]:
         orch = _pick(request, "orchestrator", "_orchestrator")
         if not orch:
             raise HTTPException(503, "Not ready")
@@ -557,22 +586,31 @@ def _register_routes(app: FastAPI) -> None:
         "/api/incidents/{incident_id}",
         dependencies=[Depends(require_scope("incidents:read"))],
     )
-    async def get_incident_detail(incident_id: str, request: Request):
+    async def get_incident_detail(
+        incident_id: str, request: Request,
+    ) -> dict[str, Any]:
         orch = _pick(request, "orchestrator", "_orchestrator")
         if not orch:
             raise HTTPException(503, "Not ready")
+        # mypy: ``orch`` / ``inc`` are ``Any`` from ``_pick``; the
+        # ``.to_dict()`` return is therefore also ``Any``. ``Incident``
+        # guarantees ``dict[str, Any]`` at runtime, so cast.
         if incident_id in orch._active_incidents:
-            return orch._active_incidents[incident_id].to_dict()
+            return cast(
+                dict[str, Any], orch._active_incidents[incident_id].to_dict(),
+            )
         for inc in orch._resolved_incidents:
             if inc.id == incident_id:
-                return inc.to_dict()
+                return cast(dict[str, Any], inc.to_dict())
         raise HTTPException(404, f"Incident {incident_id} not found")
 
     @app.post(
         "/api/trigger",
         dependencies=[Depends(require_scope("incidents:trigger"))],
     )
-    async def trigger_event(req: TriggerEventRequest, request: Request):
+    async def trigger_event(
+        req: TriggerEventRequest, request: Request,
+    ) -> dict[str, Any]:
         orch = _pick(request, "orchestrator", "_orchestrator")
         cfg = _pick(request, "config", "_config")
         if not orch:
@@ -598,7 +636,7 @@ def _register_routes(app: FastAPI) -> None:
         "/api/memory",
         dependencies=[Depends(require_scope("incidents:read"))],
     )
-    async def get_memory(request: Request):
+    async def get_memory(request: Request) -> dict[str, Any]:
         orch = _pick(request, "orchestrator", "_orchestrator")
         if not orch:
             raise HTTPException(503, "Not ready")
@@ -614,7 +652,7 @@ def _register_routes(app: FastAPI) -> None:
         "/api/tools",
         dependencies=[Depends(require_scope("incidents:read"))],
     )
-    async def get_tools(request: Request):
+    async def get_tools(request: Request) -> dict[str, Any]:
         orch = _pick(request, "orchestrator", "_orchestrator")
         if not orch:
             raise HTTPException(503, "Not ready")
@@ -624,7 +662,7 @@ def _register_routes(app: FastAPI) -> None:
         "/api/watcher/start",
         dependencies=[Depends(require_scope("watcher:control"))],
     )
-    async def start_watcher(request: Request):
+    async def start_watcher(request: Request) -> dict[str, Any]:
         global _watcher_task
         watcher = _pick(request, "watcher", "_watcher")
         if not watcher:
@@ -655,7 +693,7 @@ def _register_routes(app: FastAPI) -> None:
         "/api/watcher/stop",
         dependencies=[Depends(require_scope("watcher:control"))],
     )
-    async def stop_watcher(request: Request):
+    async def stop_watcher(request: Request) -> dict[str, Any]:
         global _watcher_task
         watcher = _pick(request, "watcher", "_watcher")
         if not watcher:
@@ -679,7 +717,7 @@ def _register_routes(app: FastAPI) -> None:
         "/api/config",
         dependencies=[Depends(require_scope("incidents:read"))],
     )
-    async def get_config(request: Request):
+    async def get_config(request: Request) -> dict[str, Any]:
         cfg = _pick(request, "config", "_config")
         if not cfg:
             raise HTTPException(503, "Not ready")
@@ -716,7 +754,7 @@ def _register_routes(app: FastAPI) -> None:
         "/api/security",
         dependencies=[Depends(require_scope("incidents:read"))],
     )
-    async def get_security_status(request: Request):
+    async def get_security_status(request: Request) -> dict[str, Any]:
         cfg = _pick(request, "config", "_config")
         if not cfg:
             raise HTTPException(503, "Not ready")
@@ -728,7 +766,7 @@ def _register_routes(app: FastAPI) -> None:
         throttle = _pick(request, "throttle", "_throttle")
         registry = _pick(request, "registry", "_registry") or create_default_registry()
 
-        agent_roles = {}
+        agent_roles: dict[str, dict[str, Any]] = {}
         for role in AgentRole:
             tools = registry.get_tools_for_role(role)
             agent_roles[role.value] = {
@@ -782,7 +820,7 @@ def _register_routes(app: FastAPI) -> None:
     # operator has to mint a new one (same contract as the CLI).
     # ──────────────────────────────────────────────────────────────
 
-    def _require_token_repo(request: Request):
+    def _require_token_repo(request: Request) -> tuple[Any, Any]:
         """Pull ``(registry, token_repo)`` off the container.
 
         Both are always wired together by :mod:`backend.shared.factory`.
@@ -806,7 +844,9 @@ def _register_routes(app: FastAPI) -> None:
         status_code=201,
         dependencies=[Depends(require_scope("admin:tokens"))],
     )
-    async def create_token(req: CreateTokenRequest, request: Request):
+    async def create_token(
+        req: CreateTokenRequest, request: Request,
+    ) -> dict[str, Any]:
         """Mint a fresh API token. Returns the raw token **once**."""
         from backend.shared.principal import Principal, generate_token, hash_token
 
@@ -862,7 +902,9 @@ def _register_routes(app: FastAPI) -> None:
         "/api/tokens",
         dependencies=[Depends(require_scope("admin:tokens"))],
     )
-    async def list_tokens(request: Request, include_revoked: bool = False):
+    async def list_tokens(
+        request: Request, include_revoked: bool = False,
+    ) -> dict[str, Any]:
         """List every persisted token (metadata only, never the raw value)."""
         _registry, token_repo = _require_token_repo(request)
         stored = await token_repo.list_all(include_revoked=include_revoked)
@@ -886,7 +928,9 @@ def _register_routes(app: FastAPI) -> None:
         "/api/tokens/{token_id}",
         dependencies=[Depends(require_scope("admin:tokens"))],
     )
-    async def revoke_token(token_id: str, request: Request):
+    async def revoke_token(
+        token_id: str, request: Request,
+    ) -> dict[str, Any]:
         """Revoke ``token_id`` in both the DB and the in-memory registry."""
         registry, token_repo = _require_token_repo(request)
         stored = await token_repo.get(token_id)
@@ -911,7 +955,9 @@ def _register_routes(app: FastAPI) -> None:
 
 
 
-async def _watcher_event_loop(watcher=None, orchestrator=None):  # pragma: no cover
+async def _watcher_event_loop(
+    watcher: Any = None, orchestrator: Any = None,
+) -> None:  # pragma: no cover
     """Background task: reads watcher events and feeds them to the orchestrator.
 
     Defaults to the module globals when arguments are omitted, so existing
@@ -919,6 +965,19 @@ async def _watcher_event_loop(watcher=None, orchestrator=None):  # pragma: no co
     """
     w = watcher if watcher is not None else _watcher
     orch = orchestrator if orchestrator is not None else _orchestrator
+    # P4.9e: ``_watcher`` / ``_orchestrator`` are typed ``Any | None``
+    # at module scope; narrow to non-None before entering the dispatch
+    # loop so strict mypy doesn't flag the ``.events()`` / ``.handle_event()``
+    # calls. In practice this path is never entered when either is None
+    # (``start_watcher`` returns 503 first), but the guard keeps the type
+    # system and the runtime honest — and avoids a silent crash if a
+    # test patches only one of the two globals.
+    if w is None or orch is None:  # pragma: no cover — defensive
+        logger.warning(
+            "Watcher event loop exiting: watcher=%s, orchestrator=%s",
+            w, orch,
+        )
+        return
     logger.info("Watcher event loop started")
     try:
         async for event in w.events():

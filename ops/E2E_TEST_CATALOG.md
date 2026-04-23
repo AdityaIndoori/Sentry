@@ -199,7 +199,7 @@ feature in P1–P3 adds rows here.
 
 ---
 
-## Test Scoreboard (as of P4.1 + P4.2 + P4.3 + P4.4 + P4.5 + P4.6 + P4.7a + P4.7b + P4.8 + P4.9a + P4.9b + P4.9c + P4.9d)
+## Test Scoreboard (as of P4.1 + P4.2 + P4.3 + P4.4 + P4.5 + P4.6 + P4.7a + P4.7b + P4.8 + P4.9a + P4.9b + P4.9c + P4.9d + P4.9e)
 
 
 
@@ -237,6 +237,112 @@ Combined unit + E2E: **724 passed / 11 skipped / 1 xfailed / 0 failed**.
 | **P4.9b (persistence.repositories generics sweep + promote)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (no new tests — generics / annotation tightening) |
 | **P4.9c (retire backend.orchestrator.* override + promote)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (no new tests — type-system tightening) |
 | **P4.9d (IAuditLog Protocol — retire audit_log type split)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (no new tests — type-system tightening) |
+| **P4.9e (retire backend.api.app override + promote)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (no new tests — type-system tightening; OpenAPI snapshot unchanged) |
+
+### P4.9e delta (retire ``backend.api.app`` override + strict-islands promote)
+
+Fifth slice of the CI-hardening sweep. The ``backend.api.app`` /
+``backend.api.routes`` / ``backend.api.*.routes`` relaxing override
+— the 900-line FastAPI gateway that was the last meaningful
+non-``backend.shared.*`` relaxer — is now retired. The file is
+fully annotated and promoted to strict-islands; full-backend
+``mypy`` goes from 13 errors to **0 errors in 100 source files**
+for the first time since the sweep began.
+
+**Fixes (by error category):**
+
+* **9 × ``[unused-ignore]``** on the legacy module-level globals
+  (``_orchestrator`` … ``_registry`` + the
+  ``_get_container._union-attr``) — every
+  ``# type: ignore[var-annotated]`` was a workaround for the
+  implicit ``None``-literal inference that strict mode no longer
+  allows. Replaced with explicit ``Any | None`` annotations
+  (``Any`` is intentional; see scope note below).
+* **2 × ``[assignment]``** in ``ready()`` — the ``payload`` dict
+  literal was inferred as ``dict[str, bool]`` from its first four
+  reachability-flag entries, then rejected the later
+  ``payload["db_error"] = <str>`` / ``payload["disk_error"] = <str>``
+  branches. Fixed with an explicit ``payload: dict[str, Any]``
+  annotation + inline rationale.
+* **2 × ``[union-attr]``** in ``_watcher_event_loop`` —
+  ``w.events()`` / ``orch.handle_event(...)`` failed because
+  ``_watcher`` / ``_orchestrator`` are ``Any | None``. Resolved by
+  narrowing to non-``None`` at the top of the coroutine — a
+  defensive guard that never fires in practice
+  (``/api/watcher/start`` returns 503 first) but keeps the type
+  system + runtime honest.
+
+**Fixes (additional strict-mode violations surfaced by retiring
+the override):**
+
+* **Route handler returns.** Every FastAPI route now declares its
+  return type — ``dict[str, Any]`` for JSON routes, ``Response``
+  for ``/metrics`` + SSE ``/api/stream/incidents``,
+  ``Response | dict[str, Any]`` for ``/api/ready`` (union covers
+  the 503 JSONResponse branch). Handlers returning raw
+  ``Response`` / ``Response | …`` objects got
+  ``@app.get(..., response_model=None)`` so FastAPI doesn't try to
+  coerce the annotation into a Pydantic response field — which
+  would both error at import time (``Response`` isn't
+  Pydantic-compatible) and inject unexpected entries into
+  ``components.schemas`` that the frozen OpenAPI snapshot doesn't
+  expect.
+* **Middleware + filter.** ``RequestIDFilter.filter`` +
+  ``RequestIDMiddleware.dispatch`` got proper ``LogRecord`` /
+  ``Callable[[Request], Awaitable[StarletteResponse]]`` signatures
+  with explicit ``-> bool`` / ``-> StarletteResponse`` returns.
+* **Lifespan + inner generators.** ``lifespan(app) ->
+  AsyncIterator[None]``; the SSE inner ``event_stream() ->
+  AsyncIterator[bytes]``.
+* **Return-narrowing ``cast``.** The single ``status`` dict return
+  in ``get_status`` + the two ``.to_dict()`` returns in
+  ``get_incident_detail`` wrap their ``Any``-typed sources in
+  ``cast(dict[str, Any], …)`` because ``_pick(...)``'s legacy
+  dual-path return is ``Any`` and ``warn_return_any = true`` now
+  blocks the propagation.
+* Minor: ``agent_roles: dict[str, dict[str, Any]]`` annotation in
+  ``get_security_status``; ``_watcher_task: asyncio.Task[None] |
+  None``; ``_require_token_repo -> tuple[Any, Any]``.
+
+**OpenAPI snapshot:** ``test_openapi_snapshot.py`` passes
+**without re-seeding**. The ``response_model=None`` kwargs on the
+three ``Response``-returning routes ensure FastAPI emits exactly
+the same ``components.schemas`` + per-route response dictionaries
+as before the annotation pass. The frontend contract at
+``backend/frontend_contract/openapi_snapshot.json`` is byte-for-byte
+identical.
+
+**pyproject.toml:**
+
+* Retired the ``[[tool.mypy.overrides]] module = [
+  "backend.api.app", "backend.api.routes",
+  "backend.api.*.routes"]`` block.
+* Added ``backend.api.app`` to the strict-islands list. Total
+  strict-islands: 35 → 36.
+* **Only the ``backend.shared.*`` legacy override remains** — its
+  container / factory / models / config / constants / prompts /
+  security / vault / agent_throttle / ai_gateway / audit_log /
+  settings modules aren't all drained yet; those stay in-scope
+  for a future sweep, out-of-scope for the CI-hardening
+  deliverable.
+
+**Scope note — ``Any`` on the legacy globals:** the concrete types
+live on ``ServiceContainer`` (the production source of truth since
+P1.1). The globals are the *backwards-compat shim* so the ~500
+unit tests that ``patch("backend.api.app._orchestrator", ...)``
+keep working unmodified — those tests pass ``MagicMock`` /
+``FakeLLMClient`` / etc., none of which satisfy a narrower nominal
+type. ``Any`` is the pragmatic choice; the handful of ``cast(...)``
+sites are the cost of that pragmatism and are documented inline.
+
+**Verification:**
+
+* ``python -m mypy backend/ --ignore-missing-imports``:
+    **13 → 0 errors** in 100 source files.
+* ``python -m ruff check backend/`` → clean.
+* ``python -m pytest backend/tests/test_openapi_snapshot.py -v`` →
+  2/2 passed, no re-seed.
+* Full suite: **724 passed / 11 skipped / 1 xfailed / 0 failed**.
 
 ### P4.9d delta (``IAuditLog`` Protocol — retire the factory's audit_log type split)
 
