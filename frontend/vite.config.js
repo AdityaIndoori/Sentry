@@ -15,4 +15,11 @@ export default defineConfig({
   build: {
     outDir: 'dist',
   },
+  // P3.1-full — vitest configuration. Runs via `npm test` in CI.
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./src/test/setup.js'],
+    css: false,
+  },
 })
