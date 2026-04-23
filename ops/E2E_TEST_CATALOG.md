@@ -199,7 +199,7 @@ feature in P1–P3 adds rows here.
 
 ---
 
-## Test Scoreboard (as of P3.4b + P2.3b-full + P3.1-full + P3.4c)
+## Test Scoreboard (as of P4.1 + P4.2 + P4.3 + P4.4)
 
 Last full run command:
 
@@ -207,7 +207,7 @@ Last full run command:
 cmd /v:on /c "set SENTRY_E2E=1&& python -m pytest backend/tests/ --no-cov -q -W ignore::DeprecationWarning"
 ```
 
-Combined unit + E2E: **685 passed / 9 skipped / 1 xfailed / 0 failed**.
+Combined unit + E2E: **706 passed / 9 skipped / 1 xfailed / 0 failed**.
 
 ### Scoreboard history
 
@@ -220,7 +220,54 @@ Combined unit + E2E: **685 passed / 9 skipped / 1 xfailed / 0 failed**.
 | **P3.4b (JSONMemoryStore removal)** | **685 passed / 9 skipped / 1 xfailed / 0 failed** (−2 retired atomic-write tests; subsumed by SQLAlchemy transactions) |
 | P2.3b-full (OTel + Prometheus/Grafana) | 685 passed / 9 skipped / 1 xfailed / 0 failed |
 | P3.1-full (App.jsx split + vitest) | 685 passed / 9 skipped / 1 xfailed / 0 failed |
-| **P3.4c (mypy `--strict` scaffolding)** | **685 passed / 9 skipped / 1 xfailed / 0 failed** |
+| P3.4c (mypy `--strict` scaffolding) | 685 passed / 9 skipped / 1 xfailed / 0 failed |
+| **P4.1 (LLM JIT credentials)** | **689 passed / 9 skipped / 1 xfailed / 0 failed** (+4) |
+| **P4.2 (Postgres API tokens + CLIs)** | **704 passed / 9 skipped / 1 xfailed / 0 failed** (+15) |
+| P4.3 (vitest coverage expansion) | 704 passed / 9 skipped / 1 xfailed / 0 failed (frontend only — 12 new JS tests) |
+| **P4.4 (OpenAPI snapshot)** | **706 passed / 9 skipped / 1 xfailed / 0 failed** (+2) |
+
+### P4.1 delta
+
+* ``BaseAgent._call_llm`` now issues + revokes a JIT credential
+  (scope ``llm_call``, 30 s TTL) around every LLM invocation. When the
+  vault kill switch is active the call is denied with a
+  ``PermissionError`` and an ``llm_call_blocked`` audit entry — the
+  LLM itself is never invoked.
+* 4 new ``TestLLMCredentialEnforcement`` tests in
+  ``test_p0_regressions.py``.
+
+### P4.2 delta
+
+* New ``backend/persistence/repositories/token_repo.py::TokenRepository``
+  + ``hydrate_registry_from_repo`` wire up the ``api_tokens`` table as
+  the persistent backing store for the in-memory ``TokenRegistry``.
+  Registry hydrates at boot in the same worker-thread pattern as the
+  sqlite bootstrap. Revoked rows land in the revocation set so leaked
+  tokens stay dead across restarts.
+* New operator CLIs under ``python -m backend.scripts.*``:
+  ``create_admin_token``, ``revoke_token``, ``list_tokens``.
+* ``ServiceContainer`` gains ``token_repo``.
+* 15 new regression tests in ``test_token_repo.py``.
+
+### P4.3 delta (frontend)
+
+* New vitest suites:
+  * ``Header.test.jsx`` (5 cases)
+  * ``MemoryPanel.test.jsx`` (4 cases)
+  * ``ToolsPanel.test.jsx`` (3 cases)
+  * ``api/__tests__/client.test.js`` (12 cases covering
+    ``getAuthToken`` / ``setAuthToken`` / ``apiFetch`` / the ``api``
+    surface wrappers).
+
+### P4.4 delta
+
+* New ``backend/tests/test_openapi_snapshot.py`` — freezes the public
+  REST surface with a normalized snapshot at
+  ``backend/frontend_contract/openapi_snapshot.json``. Set
+  ``SENTRY_UPDATE_OPENAPI_SNAPSHOT=1`` and re-run to re-seed when a
+  PR intentionally changes the contract.
+* Complementary sanity check asserts the 12 documented top-level
+  routes remain exposed.
 
 ### P3.4b delta
 
