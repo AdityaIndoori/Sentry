@@ -39,10 +39,20 @@ The metric names follow the OBS-01..03 contract in ``ops/E2E_TEST_CATALOG.md``:
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
+# P4.9g — the ``ImportError`` fallback below deliberately rebinds the
+# imported type names to ``None`` so downstream ``if _AVAILABLE:`` guards
+# have something harmless to reference. Mypy (which sees the real types
+# in the ``try`` branch) would otherwise flag the reassignment as
+# ``[assignment]`` / ``[misc]``; the ``Any`` annotations + inline
+# ``type: ignore`` tags make the intent explicit without silencing real
+# errors elsewhere. CI installs ``prometheus_client`` from
+# ``backend/requirements.txt`` so the happy path is the one that runs
+# in production.
 try:  # pragma: no cover — tested via availability gate
     from prometheus_client import (
         CONTENT_TYPE_LATEST,
@@ -53,10 +63,11 @@ try:  # pragma: no cover — tested via availability gate
     _AVAILABLE = True
 except ImportError:  # pragma: no cover — dev machines without the dep
     CONTENT_TYPE_LATEST = "text/plain; version=0.0.4; charset=utf-8"
-    CollectorRegistry = None
-    Counter = None
-    generate_latest = None
+    CollectorRegistry: Any = None  # type: ignore[assignment,misc,no-redef]
+    Counter: Any = None  # type: ignore[assignment,misc,no-redef]
+    generate_latest: Any = None  # type: ignore[assignment,no-redef]
     _AVAILABLE = False
+
 
 
 def is_available() -> bool:
@@ -108,9 +119,17 @@ if _AVAILABLE:
         registry=REGISTRY,
     )
 else:
-    REGISTRY = None
-    _INCIDENTS = _TOOL_CALLS = _LLM_CALLS = None
-    _LLM_COST = _WATCHER_EVENTS = _CB_TRIPS = None
+    # P4.9g — same rationale as the import-time fallback: these names
+    # are only referenced inside ``if _AVAILABLE:`` guards, but mypy
+    # insists on a consistent type across both branches.
+    REGISTRY: Any = None  # type: ignore[no-redef]
+    _INCIDENTS: Any = None  # type: ignore[no-redef]
+    _TOOL_CALLS: Any = None  # type: ignore[no-redef]
+    _LLM_CALLS: Any = None  # type: ignore[no-redef]
+    _LLM_COST: Any = None  # type: ignore[no-redef]
+    _WATCHER_EVENTS: Any = None  # type: ignore[no-redef]
+    _CB_TRIPS: Any = None  # type: ignore[no-redef]
+
 
 
 # ────────────────────────────────────────────────────────────────────

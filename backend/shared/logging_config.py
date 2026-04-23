@@ -23,17 +23,23 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from collections.abc import MutableMapping
 from typing import Any
 
 _CONFIGURED = False
 
 
+# P4.9g — ``ImportError`` fallbacks for optional observability deps.
+# Each imported module is rebound to ``None`` so guarded call sites
+# below can skip OTel / structlog paths without NameError. See
+# ``backend/shared/metrics.py`` for the full rationale on the
+# ``Any`` + ``type: ignore`` pattern.
 try:  # pragma: no cover — optional dep
     import structlog
 
     _HAS_STRUCTLOG = True
 except ImportError:  # pragma: no cover
-    structlog = None
+    structlog = None  # type: ignore[assignment]
     _HAS_STRUCTLOG = False
 
 
@@ -42,8 +48,9 @@ try:  # pragma: no cover — optional dep
 
     _HAS_OTEL = True
 except ImportError:  # pragma: no cover
-    _otel_trace = None
+    _otel_trace = None  # type: ignore[assignment]
     _HAS_OTEL = False
+
 
 
 def _current_trace_ids() -> tuple[str, str]:  # pragma: no cover
@@ -60,13 +67,22 @@ def _current_trace_ids() -> tuple[str, str]:  # pragma: no cover
         return "", ""
 
 
-def _add_trace_ids(_logger: Any, _method_name: str, event_dict: dict[str, Any]) -> dict[str, Any]:  # pragma: no cover
+def _add_trace_ids(
+    _logger: Any,
+    _method_name: str,
+    event_dict: MutableMapping[str, Any],
+) -> MutableMapping[str, Any]:  # pragma: no cover
+    # P4.9g — structlog's ``Processor`` protocol types the middle slot as
+    # ``MutableMapping[str, Any]``, not ``dict[str, Any]``. Matching the
+    # protocol exactly lets this function sit in the structlog
+    # processor chain without a ``[list-item]`` mypy error.
     tid, sid = _current_trace_ids()
     if tid:
         event_dict["trace_id"] = tid
     if sid:
         event_dict["span_id"] = sid
     return event_dict
+
 
 
 class _JSONFormatter(logging.Formatter):

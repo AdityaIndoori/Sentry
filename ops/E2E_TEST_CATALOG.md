@@ -199,7 +199,8 @@ feature in P1–P3 adds rows here.
 
 ---
 
-## Test Scoreboard (as of P4.1 + P4.2 + P4.3 + P4.4 + P4.5 + P4.6 + P4.7a + P4.7b + P4.8 + P4.9a + P4.9b + P4.9c + P4.9d + P4.9e + P4.9f)
+## Test Scoreboard (as of P4.1 + P4.2 + P4.3 + P4.4 + P4.5 + P4.6 + P4.7a + P4.7b + P4.8 + P4.9a + P4.9b + P4.9c + P4.9d + P4.9e + P4.9f + P4.9g)
+
 
 
 
@@ -239,8 +240,126 @@ Combined unit + E2E: **724 passed / 11 skipped / 1 xfailed / 0 failed**.
 | **P4.9d (IAuditLog Protocol — retire audit_log type split)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (no new tests — type-system tightening) |
 | **P4.9e (retire backend.api.app override + promote)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (no new tests — type-system tightening; OpenAPI snapshot unchanged) |
 | **P4.9f (CI mypy hard-fail flip)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (no new tests — 1-line CI workflow change; the **CI-hardening deliverable is complete**, every subsequent PR has a type-check gate) |
+| **P4.9g (unblock P4.9f on GitHub Actions)** | **724 passed / 11 skipped / 1 xfailed / 0 failed** (no new tests — repairs the four jobs that failed on the first CI run after the P4.9f flip: 24 mypy optional-dep-gated errors, out-of-sync npm lockfile, two yanked pinned action versions) |
+
+### P4.9g delta (unblock the P4.9f hard-fail flip on GitHub Actions)
+
+Unplanned follow-up to P4.9f. The hard-fail flip landed locally green
+but **all four CI jobs** on the push failed — none of them had been
+exercised by the local `mypy backend/ --ignore-missing-imports` +
+`ruff check` + `pytest` + `vite build` quartet that the P4.9a–f
+slices leaned on:
+
+1. **Backend (pytest) — 24 mypy errors** in three `backend.shared.*`
+   observability modules. The errors were masked locally by
+   `--ignore-missing-imports` because the dev venv lacks
+   `prometheus_client` / `structlog` / `opentelemetry-*`; on CI those
+   packages ARE installed (they're in `backend/requirements.txt`),
+   so mypy saw real `type[CollectorRegistry]` / `type[Resource]` /
+   `Module` bindings and rejected the `ImportError`-branch
+   reassignments to `None`. Latent since P2.3b, exposed only once the
+   `|| true` suffix came off.
+2. **Frontend (build) — `npm ci` `EUSAGE`**: the lockfile was missing
+   every dev-dep added during the P4.3 / P4.5 vitest expansion
+   (`@testing-library/*`, `jsdom`, `vitest`, ~100 transitive). Local
+   dev uses `npm install` which tolerates the drift; CI uses
+   `npm ci` which refuses.
+3. **Security (Trivy + SBOM) — `Unable to resolve action`**:
+   `aquasecurity/trivy-action@0.20.0` no longer resolves on the
+   Marketplace (the maintainer switched to a different versioning
+   scheme), and the same pin appears in the docker-build job too.
+   `anchore/sbom-action@v0.17.0` has the same issue — anchore ships
+   the `v0.17` moving minor pointer, not patch-pinned tags.
+4. **Docker build — same Trivy resolution failure** (second
+   `aquasecurity/trivy-action@0.20.0` pin in the image-scan step).
+
+**Fixes (by category):**
+
+* **Mypy (3 files, 24 errors → 0):**
+  * ``backend/shared/metrics.py``: typed the ``ImportError`` fallback
+    rebindings (`CollectorRegistry` / `Counter` / `generate_latest` →
+    ``Any = None``) with ``# type: ignore[assignment,misc,no-redef]``;
+    same pattern for the seven ``else: REGISTRY = None`` assignments
+    at the counter-object layer.
+  * ``backend/shared/observability.py``: identical pattern for the
+    five OpenTelemetry fallback names (``trace`` / ``Resource`` /
+    ``TracerProvider`` / ``BatchSpanProcessor`` /
+    ``ConsoleSpanExporter`` / ``OTLPSpanExporter``).
+  * ``backend/shared/logging_config.py``: ``# type: ignore[assignment]``
+    on the ``structlog = None`` / ``_otel_trace = None`` fallbacks,
+    plus widened the ``_add_trace_ids`` processor's middle slot
+    from ``dict[str, Any]`` to ``MutableMapping[str, Any]`` to
+    match structlog's ``Processor`` protocol (the `[list-item]`
+    error).
+* **pyproject.toml:** added a targeted override for the three
+  optional-dep-gated modules that disables
+  ``warn_unused_ignores``. Whether each ``# type: ignore`` is used
+  depends on whether the underlying package ships with the current
+  install; every OTHER strict island keeps the global
+  ``warn_unused_ignores = true`` so stale ignores elsewhere still
+  fail.
+* **Frontend lockfile:** regenerated
+  ``frontend/package-lock.json`` via ``npm install`` — 100+ new
+  entries for vitest, jest-dom, jsdom, and their transitive
+  graph. ``npm ci`` now succeeds locally and will on CI.
+* **``.github/workflows/ci.yml`` action pins:**
+  * ``aquasecurity/trivy-action@0.20.0`` → ``@0.28.0`` (both
+    security-scan + docker-build sites).
+  * ``anchore/sbom-action@v0.17.0`` → ``@v0.17`` (moving-minor
+    pin per anchore's supported style).
+
+**Root-cause analysis — why local was clean but CI was red:**
+
+The P4.9a–f sweep's standard verification (`python -m mypy backend/
+--ignore-missing-imports` + `ruff check` + `pytest 724/11/1/0`) is
+insufficient for modules with optional-dep-gated
+``ImportError``-fallback blocks. `--ignore-missing-imports` causes
+mypy to treat the imported names as ``Any`` locally, which silently
+accepts the ``None`` reassignment; CI's full ``requirements.txt``
+install flips the same code path from silent-accept to hard-reject.
+For modules that contain this pattern the real verification gate
+is *the CI run itself* — which is why the error only surfaced on the
+first push after the ``|| true`` came off.
+
+The npm lockfile drift is a similar category — `npm install` is
+permissive, `npm ci` is not — and had been latent since the P4.3 +
+P4.5 vitest dev-dep additions landed without a lockfile regen.
+
+The action-pin rot is the most ordinary kind: pinned third-party
+tags that were valid at commit time stopped resolving because the
+upstream maintainer changed their tagging scheme.
+
+**Verification:**
+
+* ``python -m mypy backend/ --ignore-missing-imports`` → **0
+  errors** in 100 source files (CI-equivalent command, now local
+  and CI agree).
+* ``python -m ruff check backend/`` → clean (one ``I001`` auto-fix
+  on the new ``MutableMapping`` import).
+* ``python -m pytest backend/tests/`` (`SENTRY_E2E=1`, full suite)
+  → **724 passed / 11 skipped / 1 xfailed / 0 failed** in 165s.
+* ``npm ci --prefix frontend`` → success.
+* ``npm --prefix frontend test -- --run`` → 31/31 passed (6 suites).
+* ``npm --prefix frontend run build`` → 1.07s, 175.57 kB bundle
+  (byte-identical to pre-P4.9g).
+
+**Process note:** future hardening slices that touch
+``backend.shared.{metrics,logging_config,observability}`` or the
+optional-dep-gated pattern in general should either include a
+``pip install -r backend/requirements.txt && mypy …`` step in
+local verification, or run the CI locally via ``act`` before
+pushing. The equivalent of a quick
+``docker run --rm -v $PWD:/src python:3.12 bash -c "pip install -r
+backend/requirements.txt && mypy backend/ --ignore-missing-imports"``
+would have caught this before the push.
+
+**State at close:** same as P4.9f — 36 strict-islands modules, 1
+relaxing override left (``backend.shared.*``), 0 full-backend mypy
+errors, CI mypy step is a hard gate on every PR — but now the
+gate actually closes green on GitHub Actions.
 
 ### P4.9f delta (CI ``|| true`` → hard-fail — the capstone)
+
 
 Sixth and final slice of the CI-hardening sweep. One-line change
 to ``.github/workflows/ci.yml`` flips the mypy step from soft-fail
