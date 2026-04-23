@@ -61,6 +61,9 @@ class ServiceContainer:
 
     # P2.1: bearer-token registry. Empty → auth disabled (dev mode).
     auth_tokens: Any = None       # backend.api.auth.TokenRegistry
+    # P4.2: persistent backing store for the registry. None → tokens
+    # are env-seeded only and won't survive a restart.
+    token_repo: Any = None        # backend.persistence.repositories.token_repo.TokenRepository
 
     # P2.2: pluggable OSS secrets provider (env/file/sops/vault).
     secrets: Any = None           # backend.shared.secrets.ISecretsProvider

@@ -85,6 +85,7 @@ def build_container(
     # ``DATABASE_URL`` upgrades it to :class:`PostgresAuditLog`.
     from backend.persistence.repositories.incident_repo import IncidentRepository
     from backend.persistence.repositories.memory_repo import PostgresMemoryRepo
+    from backend.persistence.repositories.token_repo import TokenRepository
     from backend.persistence.session import build_database
 
     database_url = settings.database_url
@@ -102,6 +103,10 @@ def build_container(
     database = build_database(database_url)
     memory = PostgresMemoryRepo(database)
     incident_repo = IncidentRepository(database)
+    # P4.2: persistent store for API bearer tokens. Always created —
+    # an empty table is indistinguishable from "no persisted tokens"
+    # and the env-seeded admin token path is preserved.
+    token_repo = TokenRepository(database)
 
     if settings.database_url:
         from backend.persistence.repositories.audit_repo import PostgresAuditLog
@@ -217,13 +222,46 @@ def build_container(
                 "(provider=%s)", secrets_provider.__class__.__name__,
             )
 
-    # ── P2.1: bearer-token registry ─────────────────────────────────────
+    # ── P2.1 + P4.2: bearer-token registry + persistent backing ─────────
     #
     # Empty registry → auth disabled ("dev mode"). Tests that want to
     # exercise auth flows populate this in their fixtures.
     # ``API_AUTH_TOKEN`` (env or secrets backend) seeds a default admin.
+    #
+    # P4.2: after env seeding we hydrate the registry from the
+    # ``api_tokens`` DB table so operator-minted tokens survive restarts.
+    # Hydration is idempotent and runs in the same worker-thread pattern
+    # as the sqlite bootstrap above — it can't block the calling loop.
     auth_tokens = TokenRegistry()
     seed_tokens_from_settings(effective_settings, auth_tokens)
+
+    if synthesized_sqlite or settings.database_url:
+        import asyncio as _asyncio
+        import threading as _threading
+
+        from backend.api.auth import hydrate_registry_from_repo
+
+        _hydrate_err: dict[str, BaseException] = {}
+
+        async def _do_hydrate() -> None:
+            try:
+                await hydrate_registry_from_repo(auth_tokens, token_repo)
+            finally:
+                await database.engine.dispose()
+
+        def _hydrate_thread() -> None:
+            try:
+                _asyncio.run(_do_hydrate())
+            except BaseException as exc:  # pragma: no cover — defensive
+                _hydrate_err["err"] = exc
+
+        t = _threading.Thread(
+            target=_hydrate_thread, name="sentry-auth-hydrate", daemon=True,
+        )
+        t.start()
+        t.join()
+        if "err" in _hydrate_err:  # pragma: no cover
+            logger.warning("auth: token hydrate failed: %s", _hydrate_err["err"])
 
     container = ServiceContainer(
         settings=settings,
@@ -243,6 +281,7 @@ def build_container(
         database=database,
         incident_repo=incident_repo,
         auth_tokens=auth_tokens,
+        token_repo=token_repo,
         secrets=secrets_provider,
         broadcaster=broadcaster,
     )

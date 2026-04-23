@@ -122,8 +122,8 @@ def seed_tokens_from_settings(settings, registry: TokenRegistry) -> None:
     P2.1 keeps things simple: if the operator configured
     ``API_AUTH_TOKEN`` we treat that one token as an admin principal
     (``scopes={"*"}``). Proper multi-token management (DB rows, CLI
-    mint / revoke, rotation) lands in P2.2 alongside the secrets
-    provider.
+    mint / revoke, rotation) lands in P4.2 —
+    :func:`hydrate_registry_from_repo` below.
     """
     token = (getattr(settings, "api_auth_token", None) or "").strip()
     if not token:
@@ -136,6 +136,48 @@ def seed_tokens_from_settings(settings, registry: TokenRegistry) -> None:
     )
     registry.add(token, principal)
     logger.info("Auth: seeded admin token from API_AUTH_TOKEN (id=%s)", principal.id)
+
+
+async def hydrate_registry_from_repo(registry: "TokenRegistry", token_repo) -> int:  # noqa: F821 - fwd ref
+    """P4.2: rebuild the in-memory registry from persisted ``api_tokens`` rows.
+
+    The in-memory :class:`TokenRegistry` is keyed by the raw token (so
+    the middleware hot path stays lock-free and synchronous). At
+    startup the raw tokens are not available — we only have their
+    hashes from the DB. We therefore register each stored row under
+    its already-hashed key by calling an internal ``_add_hashed``
+    path.
+
+    Already-revoked rows are added to the registry's revocation set so
+    a previously-leaked token that somehow reaches the middleware is
+    still rejected, even though it's no longer a live principal.
+
+    Returns the number of active principals hydrated.
+    """
+    active = 0
+    stored_tokens = await token_repo.list_all(include_revoked=True)
+    for stored in stored_tokens:
+        principal = Principal(
+            id=stored.id,
+            name=stored.name,
+            role=stored.role,
+            scopes=frozenset(stored.scopes),
+        )
+        with registry._lock:  # type: ignore[attr-defined]
+            if stored.is_revoked:
+                # Record the hash as revoked WITHOUT adding it back to the
+                # active map. If the raw token ever shows up on the wire,
+                # _get_registry(request).is_revoked() will still see it.
+                registry._revoked.add(stored.token_hash)  # type: ignore[attr-defined]
+            else:
+                registry._tokens[stored.token_hash] = principal  # type: ignore[attr-defined]
+                registry._revoked.discard(stored.token_hash)  # type: ignore[attr-defined]
+                active += 1
+    logger.info(
+        "Auth: hydrated %d active principals from token repo (%d total stored)",
+        active, len(stored_tokens),
+    )
+    return active
 
 
 # ---------------------------------------------------------------------------
@@ -310,4 +352,5 @@ __all__ = [
     "AuthMiddleware",
     "require_scope",
     "seed_tokens_from_settings",
+    "hydrate_registry_from_repo",
 ]
