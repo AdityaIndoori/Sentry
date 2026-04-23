@@ -58,9 +58,19 @@ jobs:
         run: ruff check backend/ --output-format=github || true
 
       - name: Mypy (typecheck)
-        # Strict-mode is a P3.4 deliverable; we run a loose pass here
-        # to catch obvious regressions without gating the PR.
-        run: mypy backend/ --ignore-missing-imports --no-strict-optional || true
+        # P3.4c: pyproject.toml now enables ``disallow_untyped_defs`` +
+        # ``disallow_any_generics`` globally, with per-module overrides
+        # relaxing strict mode for packages that still have a backlog
+        # (agents, tools, orchestrator, api routes, watcher, mcp_tools,
+        # services, shared-legacy). Strict-mode "islands" are listed
+        # explicitly at the bottom of ``[tool.mypy]`` — adding a module
+        # there is a one-line commitment to keep it clean.
+        #
+        # Once a package is fully annotated, delete its override block
+        # and promote it to the strict-islands list. When every override
+        # is gone, drop the ``|| true`` below and the ``--ignore-missing-
+        # imports`` flag so CI hard-fails on any violation.
+        run: mypy backend/ --ignore-missing-imports || true
 
       - name: Pytest (unit + E2E)
         env:

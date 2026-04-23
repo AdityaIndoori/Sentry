@@ -46,9 +46,21 @@ ignore = [
 "backend/tests/**" = ["F403", "F405", "F811", "B011"]
 
 # ────────────────────────────────────────────────────────────────────
-# mypy — loose baseline today; ``--strict`` is a future P3.4b
-# deliverable. Running now catches real regressions without gating
-# the PR on every untyped third-party import.
+# mypy — P3.4c scaffolding for ``--strict``.
+#
+# Strategy: flip the two strict-defining flags on globally, then use
+# per-module overrides to *progressively* relax them back to ``false``
+# for packages that still have a large backlog of untyped defs.
+#
+# This means:
+#   * Newly-written modules (``backend.shared.observability``,
+#     ``backend.shared.logging_config``, secrets, metrics, principal,
+#     auth, broadcaster, persistence.*) are held to strict mode today.
+#   * Legacy agent/tool/orchestrator/watcher/api/mcp_tools/services
+#     code is allowed to keep its current annotation gaps — CI will
+#     still catch new strict-mode violations in the strict modules.
+#
+# As each legacy package is cleaned up, remove its override block.
 # ────────────────────────────────────────────────────────────────────
 [tool.mypy]
 python_version = "3.12"
@@ -58,11 +70,13 @@ warn_redundant_casts = true
 warn_unreachable = true
 check_untyped_defs = true
 no_implicit_optional = true
-# Loosened vs. --strict:
-#   * disallow_untyped_defs = false (agents still use **kwargs).
-#   * disallow_any_generics = false (SQLAlchemy + LangGraph leak Any).
-disallow_untyped_defs = false
-disallow_any_generics = false
+# Strict-ish defaults — per-module overrides below relax these for the
+# packages that aren't yet annotated. When an override is deleted the
+# module is held to the strict rules globally.
+disallow_untyped_defs = true
+disallow_any_generics = true
+disallow_incomplete_defs = true
+warn_return_any = true
 
 [[tool.mypy.overrides]]
 # Alembic migration files are machine-written — no need to typecheck.
@@ -73,6 +87,96 @@ ignore_errors = true
 # Tests use pytest fixtures that mypy can't infer cleanly.
 module = "backend.tests.*"
 ignore_errors = true
+
+# ── Progressive-tightening overrides ───────────────────────────────
+# Each block below relaxes ``--strict`` for a package that still
+# has a meaningful annotation backlog. Delete the block once the
+# package is fully annotated.
+[[tool.mypy.overrides]]
+module = "backend.agents.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_any_generics = false
+warn_return_any = false
+
+[[tool.mypy.overrides]]
+module = "backend.tools.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_any_generics = false
+warn_return_any = false
+
+[[tool.mypy.overrides]]
+module = "backend.orchestrator.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_any_generics = false
+warn_return_any = false
+
+[[tool.mypy.overrides]]
+# ``backend.api.auth`` + ``backend.api.broadcaster`` are held to strict
+# mode via explicit inclusion below. Everything else under ``backend.api``
+# (app wiring, route handlers with FastAPI magic) is relaxed.
+module = [
+  "backend.api.app",
+  "backend.api.routes",
+  "backend.api.*.routes",
+]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_any_generics = false
+warn_return_any = false
+
+[[tool.mypy.overrides]]
+module = "backend.watcher.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_any_generics = false
+warn_return_any = false
+
+[[tool.mypy.overrides]]
+module = "backend.mcp_tools.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_any_generics = false
+warn_return_any = false
+
+[[tool.mypy.overrides]]
+module = "backend.services.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_any_generics = false
+warn_return_any = false
+
+[[tool.mypy.overrides]]
+# ``backend.shared`` contains both strict-clean modules (observability,
+# logging_config, metrics, secrets, principal, circuit_breaker) and
+# legacy ones (container, factory, models, config). We relax the whole
+# package globally and tighten individual strict-clean modules below.
+module = "backend.shared.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_any_generics = false
+warn_return_any = false
+
+# ── Strict islands ─────────────────────────────────────────────────
+# Modules that ARE fully annotated and held to strict mode. Adding a
+# module here is a one-line commitment that it stays clean.
+[[tool.mypy.overrides]]
+module = [
+  "backend.shared.observability",
+  "backend.shared.logging_config",
+  "backend.shared.metrics",
+  "backend.shared.secrets",
+  "backend.shared.principal",
+  "backend.shared.circuit_breaker",
+  "backend.api.auth",
+  "backend.api.broadcaster",
+]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_any_generics = true
+warn_return_any = true
 
 # ────────────────────────────────────────────────────────────────────
 # pytest — delegates to the legacy ``pytest.ini`` until P3.4b migration.
