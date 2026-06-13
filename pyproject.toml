@@ -221,6 +221,9 @@ module = [
   # clean (verified via ``mypy --strict``).
   "backend.services.models",
   "backend.services.registry",
+  # Effectiveness pass: new modules are strict from birth.
+  "backend.shared.fingerprint",
+  "backend.services.notifier",
   # P4.7c: retired ``backend.agents.*`` + ``backend.tools.*`` override
   # blocks — all agent + tool modules pass ``mypy --strict``.
   "backend.agents.base_agent",
