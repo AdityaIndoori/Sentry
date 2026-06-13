@@ -19,6 +19,7 @@ from backend.agents.surgeon_agent import SurgeonAgent
 # Agent imports for Zero Trust delegation
 from backend.agents.triage_agent import TriageAgent
 from backend.agents.validator_agent import ValidatorAgent
+from backend.shared import fingerprint as fp
 from backend.shared.agent_throttle import AgentThrottle
 from backend.shared.ai_gateway import AIGateway
 from backend.shared.circuit_breaker import CostCircuitBreaker
@@ -54,6 +55,14 @@ class IncidentGraphState(TypedDict, total=False):
     tool_results: list[str]         # Accumulated tool call results
     tool_loop_count: int  # How many diagnosis tool loops we've done
     error: str            # Error message if any node fails
+    # Memory hints retrieved during triage — verified past fixes that
+    # also flow to the Detective + Surgeon so investigation can start
+    # from a known-good hypothesis instead of from scratch.
+    memory_hints: list[dict[str, Any]]
+    # Verification-failure feedback injected into the retry loop so the
+    # next diagnosis/remediation attempt knows WHAT was tried and WHY
+    # the validator rejected it (Reflexion-style self-correction).
+    retry_feedback: str
 
 
 # ---------------------------------------------------------------------------
@@ -141,8 +150,12 @@ class IncidentGraphBuilder:
                               detail="Quick severity assessment using low-effort analysis")
 
         try:
+            # Keyword extraction (stop-words removed) replaces the naive
+            # first-5-words split: "ERROR: Connection refused on port 5432"
+            # now queries on {connection, refused, port, 5432} instead of
+            # {error:, connection, refused, on, port}.
             relevant = await self._memory.get_relevant(
-                incident.symptom.lower().split()[:5]
+                fp.extract_keywords(incident.symptom)
             )
             if relevant:
                 incident.log_activity(ActivityType.INFO, "triage",
@@ -150,7 +163,16 @@ class IncidentGraphBuilder:
                                       detail="; ".join(h.symptom[:60] for h in relevant[:3]))
 
             service_context = state.get("service_context", "")
-            memory_hints = [{"symptom": h.symptom, "root_cause": h.root_cause} for h in relevant] if relevant else None
+            # Include the verified fix — knowing HOW a past incident was
+            # fixed is the most actionable hint for downstream agents.
+            memory_hints = (
+                [
+                    {"symptom": h.symptom, "root_cause": h.root_cause, "fix": h.fix}
+                    for h in relevant[:5]
+                ]
+                if relevant
+                else None
+            )
 
             # ── Delegate to TriageAgent (Zero Trust secured) ──
             # ``vault`` / ``gateway`` are typed ``Optional[...]`` on the
@@ -165,7 +187,7 @@ class IncidentGraphBuilder:
                 audit_log=self._audit_log,
             )
             result = await agent.run(incident, memory_hints=memory_hints, service_context=service_context)
-            self._track_cost(result)
+            self._track_cost(result, incident)
             self._apply_agent_activities(incident, result, "triage")
 
             severity_str = result.get("severity", "medium")
@@ -204,6 +226,9 @@ class IncidentGraphBuilder:
                 "triage": {"severity": severity_str, "verdict": verdict, "summary": summary},
                 "tool_results": [],
                 "tool_loop_count": 0,
+                # Carry hints forward so Detective + Surgeon can reuse
+                # verified past fixes instead of rediscovering them.
+                "memory_hints": memory_hints or [],
             }
         except Exception as e:
             logger.error(f"Triage error for {incident.id}: {e}")
@@ -237,6 +262,14 @@ class IncidentGraphBuilder:
                 return {**state, "incident": incident, "error": "circuit_breaker_tripped"}
 
             service_context = state.get("service_context", "")
+            memory_hints = state.get("memory_hints") or []
+            retry_feedback = state.get("retry_feedback", "")
+            if retry_feedback:
+                incident.log_activity(
+                    ActivityType.INFO, "diagnosis",
+                    "Retrying with feedback from failed verification",
+                    detail=retry_feedback[:500],
+                )
 
             # ── Delegate to DetectiveAgent (Zero Trust secured) ──
             # See TriageAgent instantiation for the ``cast(...)`` rationale.
@@ -250,8 +283,13 @@ class IncidentGraphBuilder:
                 throttle=cast(AgentThrottle, self._throttle),
                 audit_log=self._audit_log,
             )
-            result = await agent.run(incident, service_context=service_context)
-            self._track_cost(result)
+            result = await agent.run(
+                incident,
+                service_context=service_context,
+                memory_hints=memory_hints,
+                retry_feedback=retry_feedback,
+            )
+            self._track_cost(result, incident)
             self._apply_agent_activities(incident, result, "diagnosis")
 
             # Apply result to incident
@@ -303,6 +341,8 @@ class IncidentGraphBuilder:
 
         try:
             tool_results = state.get("tool_results", [])
+            memory_hints = state.get("memory_hints") or []
+            retry_feedback = state.get("retry_feedback", "")
 
             # ── Delegate to SurgeonAgent (Zero Trust secured) ──
             # See TriageAgent instantiation for the ``cast(...)`` rationale.
@@ -317,8 +357,13 @@ class IncidentGraphBuilder:
                 config=self._config,
                 audit_log=self._audit_log,
             )
-            result = await agent.run(incident, tool_results_context=tool_results)
-            self._track_cost(result)
+            result = await agent.run(
+                incident,
+                tool_results_context=tool_results,
+                memory_hints=memory_hints,
+                retry_feedback=retry_feedback,
+            )
+            self._track_cost(result, incident)
             self._apply_agent_activities(incident, result, "remediation")
 
             # Apply result to incident
@@ -370,6 +415,21 @@ class IncidentGraphBuilder:
                               detail="Checking if fix resolved the issue")
 
         try:
+            # Evidence for the validator: what the Surgeon's tools
+            # actually reported. Without this the Validator judged a fix
+            # from its description alone — it literally could not tell
+            # whether apply_patch / restart_service succeeded or failed.
+            remediation = state.get("remediation") or {}
+            evidence_lines: list[str] = []
+            for tr in remediation.get("tool_results", []):
+                if isinstance(tr, dict):
+                    evidence_lines.append(
+                        f"- {tr.get('tool', '?')}: success={tr.get('success')} "
+                        f"audit_only={tr.get('audit_only', False)} "
+                        f"output={(tr.get('output') or '')[:200]}"
+                    )
+            remediation_evidence = "\n".join(evidence_lines)
+
             # ── Delegate to ValidatorAgent (Zero Trust secured) ──
             # See TriageAgent instantiation for the ``cast(...)`` rationale.
             incident.current_agent_action = "Calling ValidatorAgent (secured)..."
@@ -379,8 +439,8 @@ class IncidentGraphBuilder:
                 gateway=cast(AIGateway, self._gateway),
                 audit_log=self._audit_log,
             )
-            result = await agent.run(incident)
-            self._track_cost(result)
+            result = await agent.run(incident, remediation_evidence=remediation_evidence)
+            self._track_cost(result, incident)
             self._apply_agent_activities(incident, result, "verification")
 
             resolved = result.get("resolved", False)
@@ -407,6 +467,19 @@ class IncidentGraphBuilder:
                                           f"Fix not verified — retrying (attempt {incident.retry_count})",
                                           detail=reason,
                                           metadata={"retry_count": incident.retry_count})
+                    # Reflexion-style feedback: tell the next diagnosis
+                    # round what was tried and why it failed, so the
+                    # retry explores a DIFFERENT hypothesis instead of
+                    # re-proposing the same rejected fix.
+                    feedback = (
+                        f"PREVIOUS ATTEMPT (#{incident.retry_count}) FAILED VERIFICATION.\n"
+                        f"Previously diagnosed root cause: {incident.root_cause or 'unknown'}\n"
+                        f"Previously attempted fix: {incident.fix_applied or 'none'}\n"
+                        f"Validator's rejection reason: {reason or 'not given'}\n"
+                        "Do NOT repeat the same fix. Re-examine the evidence and "
+                        "consider alternative root causes."
+                    )
+                    state = {**state, "retry_feedback": feedback}
 
             incident.log_activity(ActivityType.PHASE_COMPLETE, "verification", "Verification complete",
                                   metadata={"resolved": resolved})
@@ -467,11 +540,25 @@ class IncidentGraphBuilder:
                 metadata=activity.get("metadata"),
             )
 
-    def _track_cost(self, response: dict[str, Any]) -> None:
-        self._cb.record_usage(
-            response.get("input_tokens", 0),
-            response.get("output_tokens", 0),
-        )
+    def _track_cost(self, response: dict[str, Any], incident: Incident | None = None) -> None:
+        """Record token usage on the circuit breaker and (new) the incident.
+
+        ``incident.cost_usd`` was previously never written — the dashboard
+        permanently showed $0.0000 per incident and operators couldn't
+        see which error classes were burning the budget. We now attribute
+        each agent call's cost to the incident it served, using the same
+        pricing constants as the circuit breaker.
+        """
+        input_tokens = response.get("input_tokens", 0)
+        output_tokens = response.get("output_tokens", 0)
+        self._cb.record_usage(input_tokens, output_tokens)
+        if incident is not None:
+            from backend.shared.models import CostTracker
+            cost = (
+                (input_tokens / 1000) * CostTracker.INPUT_COST_PER_1K
+                + (output_tokens / 1000) * CostTracker.OUTPUT_COST_PER_1K
+            )
+            incident.cost_usd = round(incident.cost_usd + cost, 6)
 
     async def _auto_commit_fix(self, incident: Incident) -> str | None:  # pragma: no cover
         """

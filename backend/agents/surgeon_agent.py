@@ -53,9 +53,18 @@ class SurgeonAgent(BaseAgent):
         self,
         incident: Incident,
         tool_results_context: list[str] | None = None,
+        memory_hints: list[dict[str, Any]] | None = None,
+        retry_feedback: str = "",
     ) -> dict[str, Any]:
         """
         Propose and optionally apply a fix.
+
+        ``memory_hints`` — verified past fixes for similar symptoms so a
+        known-good remediation can be reused instead of invented.
+
+        ``retry_feedback`` — present when a previous fix failed
+        verification; instructs the agent not to repeat it.
+
         Returns: {"fix_description": str, "fix_applied": bool, "tool_results": list,
                   "tools_used": list, "input_tokens": int, "output_tokens": int,
                   "activities": list}
@@ -76,11 +85,26 @@ class SurgeonAgent(BaseAgent):
                 for r in tool_results_context[-15:]:
                     diag_context += f"  {r}\n"
 
+            hints_context = ""
+            if memory_hints:
+                hints_context = "\n\nFixes that worked for similar PAST incidents:\n"
+                for hint in memory_hints[:5]:
+                    hints_context += (
+                        f"- Root cause: {hint.get('root_cause', 'N/A')[:160]} -> "
+                        f"Fix: {hint.get('fix', 'N/A')[:200]}\n"
+                    )
+
+            feedback_context = ""
+            if retry_feedback:
+                feedback_context = f"\n\n{retry_feedback}\n"
+
             context = (
                 f"Root cause: {incident.root_cause or 'Unknown'}\n"
                 f"Symptom: {incident.symptom}\n"
                 f"Mode: {self._config.security.mode.value}"
                 f"{diag_context}"
+                f"{hints_context}"
+                f"{feedback_context}"
             )
 
             full_prompt = f"{SURGEON_SYSTEM_PROMPT}\n\nApply a fix for this incident:\n\n{context}"

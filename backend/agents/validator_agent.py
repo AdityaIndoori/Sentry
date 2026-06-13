@@ -37,9 +37,15 @@ class ValidatorAgent(BaseAgent):
     ) -> None:
         super().__init__(vault, AgentRole.VALIDATOR, gateway, audit_log=audit_log, llm=llm)
 
-    async def run(self, incident: Incident) -> dict[str, Any]:
+    async def run(self, incident: Incident, remediation_evidence: str = "") -> dict[str, Any]:
         """
         Verify fix was successful.
+
+        ``remediation_evidence`` — structured tool-result summary from the
+        remediation phase (per-tool success/failure + output). Without it
+        the validator judged a fix from its *description* alone and could
+        not tell whether apply_patch / restart_service actually ran.
+
         Returns: {"resolved": bool, "reason": str, "input_tokens": int,
                   "output_tokens": int, "activities": list}
         """
@@ -48,10 +54,17 @@ class ValidatorAgent(BaseAgent):
         cred = self._get_credential(scope="llm_call", ttl=30)
 
         try:
+            evidence_text = ""
+            if remediation_evidence:
+                evidence_text = (
+                    f"\nRemediation tool evidence (actual execution results):\n"
+                    f"{remediation_evidence}"
+                )
             context = (
                 f"Symptom: {incident.symptom}\n"
                 f"Root cause: {incident.root_cause or 'Unknown'}\n"
                 f"Fix applied: {incident.fix_applied or 'None'}"
+                f"{evidence_text}"
             )
 
             full_prompt = f"{VALIDATOR_SYSTEM_PROMPT}\n\nVerify this fix:\n\n{context}"

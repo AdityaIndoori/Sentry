@@ -47,9 +47,24 @@ class DetectiveAgent(BaseAgent):
         self._registry = registry
         self._throttle = throttle
 
-    async def run(self, incident: Incident, service_context: str = "") -> dict[str, Any]:
+    async def run(
+        self,
+        incident: Incident,
+        service_context: str = "",
+        memory_hints: list[dict[str, Any]] | None = None,
+        retry_feedback: str = "",
+    ) -> dict[str, Any]:
         """
         Investigate incident root cause.
+
+        ``memory_hints`` — verified past incidents (symptom/root_cause/fix)
+        retrieved during triage, so investigation can start from a
+        known-good hypothesis instead of from scratch.
+
+        ``retry_feedback`` — present when a previous fix failed
+        verification; tells the agent what was tried and why it failed
+        so the retry explores a different hypothesis.
+
         Returns: {"root_cause": str, "recommended_fix": str, "tool_results": list,
                   "input_tokens": int, "output_tokens": int, "activities": list}
         """
@@ -66,10 +81,27 @@ class DetectiveAgent(BaseAgent):
             svc_text = ""
             if service_context:
                 svc_text = f"\n\n{service_context}\n"
+
+            hints_text = ""
+            if memory_hints:
+                hints_text = "\n\nVerified fixes from similar PAST incidents (check these hypotheses first):\n"
+                for hint in memory_hints[:5]:
+                    hints_text += (
+                        f"- Symptom: {hint.get('symptom', 'N/A')[:120]}\n"
+                        f"  Root cause: {hint.get('root_cause', 'N/A')[:160]}\n"
+                        f"  Fix that worked: {hint.get('fix', 'N/A')[:160]}\n"
+                    )
+
+            feedback_text = ""
+            if retry_feedback:
+                feedback_text = f"\n\n{retry_feedback}\n"
+
             messages = [
                 f"Investigate this incident:\n\nSymptom: {safe_symptom}\n"
                 f"Triage result: {incident.triage_result or 'N/A'}"
                 f"{svc_text}"
+                f"{hints_text}"
+                f"{feedback_text}"
             ]
 
             for loop_idx in range(MAX_TOOL_LOOPS):
