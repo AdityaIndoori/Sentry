@@ -301,6 +301,21 @@ class VerificationResult(BaseModel):
     @classmethod
     def parse_from_text(cls, text: str) -> "VerificationResult":
         text_lower = text.lower()
+
+        # Tier 3a: honor the EXPLICIT contract first. The verification
+        # prompt mandates "RESOLVED: <true|false>" — previously this
+        # line was never checked, so "RESOLVED: false" parsed as
+        # resolved=True via the "resolved" positive-keyword heuristic
+        # (the word "resolved" is literally in the answer either way).
+        explicit = re.search(r"resolved:\s*(true|false|yes|no)\b", text_lower)
+        if explicit:
+            resolved = explicit.group(1) in ("true", "yes")
+            # Prefer the REASON: line for the reason when present.
+            reason_match = re.search(r"reason:\s*(.+)", text, re.IGNORECASE)
+            reason = (reason_match.group(1).strip() if reason_match else text)[:200]
+            return cls(resolved=resolved, reason=reason)
+
+        # Tier 3b: keyword heuristics for free-text answers.
         # Bug fix: Check for negation phrases FIRST before checking positive keywords.
         # "not fixed", "not resolved", "not success" should NOT parse as resolved.
         negation_phrases = ["not fixed", "not resolved", "not success", "unsuccessful",
