@@ -71,6 +71,9 @@ class ServiceContainer:
     # P2.4: in-process SSE fan-out for live incident updates.
     broadcaster: Any = None       # backend.api.broadcaster.IncidentBroadcaster
 
+    # Escalation webhook notifier (None → notifications disabled).
+    notifier: Any = None          # backend.services.notifier.WebhookNotifier
+
     # Watcher->orchestrator dispatch task (owned by the container so
     # shutdown can cancel it cleanly).
     watcher_task: asyncio.Task | None = None
@@ -104,6 +107,13 @@ class ServiceContainer:
                 await self.broadcaster.close()
             except Exception:  # pragma: no cover
                 logger.exception("broadcaster close failed")
+
+        # 3b) Drain in-flight webhook notifications (bounded wait).
+        if self.notifier is not None:
+            try:
+                await self.notifier.close()
+            except Exception:  # pragma: no cover
+                logger.exception("notifier close failed")
 
         # 4) Dispose the DB engine (if any) last so any in-flight
         #    shutdown writes from 1+2 can still persist.

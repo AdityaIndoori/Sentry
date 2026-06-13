@@ -189,6 +189,21 @@ def build_container(
     from backend.api.broadcaster import IncidentBroadcaster
     broadcaster = IncidentBroadcaster()
 
+    # ── Escalation webhook notifier (optional) ─────────────────────────
+    #
+    # Only constructed when the operator sets NOTIFY_WEBHOOK_URL. The
+    # orchestrator pings it on every terminal state; it self-filters to
+    # ESCALATED (always) + RESOLVED (when NOTIFY_ON_RESOLVED=true).
+    notifier = None
+    if getattr(settings, "notify_webhook_url", ""):
+        from backend.services.notifier import WebhookNotifier
+
+        notifier = WebhookNotifier(
+            settings.notify_webhook_url,
+            notify_resolved=bool(getattr(settings, "notify_on_resolved", False)),
+        )
+        logger.info("Notifier: webhook notifications enabled")
+
     orchestrator = Orchestrator(
         config,
         llm,
@@ -203,8 +218,12 @@ def build_container(
         # P1.3: pass incident persistence + timeout knob.
         incident_repo=incident_repo,
         orchestrator_timeout_seconds=settings.orchestrator_timeout_seconds,
+        dedup_window_seconds=getattr(settings, "dedup_window_seconds", 60),
         # P2.4: live SSE fan-out.
         broadcaster=broadcaster,
+        # Effectiveness: escalation cooldown + human notification.
+        escalation_cooldown_seconds=getattr(settings, "escalation_cooldown_seconds", 1800),
+        notifier=notifier,
     )
     watcher = LogWatcher(config.watcher)
 
@@ -293,6 +312,7 @@ def build_container(
         token_repo=token_repo,
         secrets=secrets_provider,
         broadcaster=broadcaster,
+        notifier=notifier,
     )
 
     logger.info(
