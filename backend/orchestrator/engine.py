@@ -18,6 +18,25 @@ P1.3 upgrades
   transition gets persisted (create, terminal). The legacy
   ``_active_incidents`` / ``_resolved_incidents`` in-memory views are
   preserved so existing unit tests keep working.
+
+Effectiveness upgrades
+----------------------
+* **Normalized fingerprints**: dedup keys now hash a *normalized* log
+  line (timestamps/PIDs/IPs/hex collapse to placeholders) via the
+  canonical :mod:`backend.shared.fingerprint` module — shared with the
+  persistence layer — so real log storms actually dedup.
+* **Escalation cooldown**: once an incident ESCALATES, the same
+  fingerprint is suppressed for ``escalation_cooldown_seconds``
+  (default 30 min). Without this, an unfixable recurring error would
+  re-trigger the full agent pipeline every dedup-window expiry and
+  burn the LLM budget retrying a fix that already failed.
+* **Real memory compaction**: when the store crosses the configured
+  threshold, near-duplicate entries (same root_cause+fix) are merged
+  and the store is trimmed to the threshold — previously this was a
+  log line with no action, letting retrieval quality degrade forever.
+* **Escalation notifications**: an optional ``notifier`` (see
+  :class:`backend.services.notifier.WebhookNotifier`) is pinged on
+  terminal states so a human actually finds out when Sentry gives up.
 """
 
 from __future__ import annotations
@@ -32,6 +51,7 @@ from typing import Any
 
 from backend.orchestrator.graph import IncidentGraphBuilder, IncidentGraphState
 from backend.services.registry import ServiceRegistry
+from backend.shared import fingerprint as fp
 from backend.shared.agent_throttle import AgentThrottle
 from backend.shared.ai_gateway import AIGateway
 from backend.shared.circuit_breaker import CostCircuitBreaker
@@ -43,7 +63,13 @@ from backend.shared.interfaces import (
     IOrchestrator,
     IToolExecutor,
 )
-from backend.shared.metrics import inc_circuit_breaker_trip, inc_incident
+from backend.shared.metrics import (
+    inc_circuit_breaker_trip,
+    inc_event_deduped,
+    inc_event_suppressed,
+    inc_incident,
+    inc_memory_compaction,
+)
 from backend.shared.models import (
     Incident,
     IncidentState,
@@ -62,6 +88,9 @@ MAX_RESOLVED_INCIDENTS = 100
 # --- P1.3: orchestrator runtime knobs ---
 DEFAULT_ORCH_TIMEOUT_SECONDS = 300
 DEFAULT_DEDUP_WINDOW_SECONDS = 60
+# After an ESCALATED terminal state, suppress the same fingerprint for
+# this long (seconds). 0 disables suppression.
+DEFAULT_ESCALATION_COOLDOWN_SECONDS = 1800
 
 
 class Orchestrator(IOrchestrator):
@@ -91,6 +120,8 @@ class Orchestrator(IOrchestrator):
         orchestrator_timeout_seconds: int = DEFAULT_ORCH_TIMEOUT_SECONDS,
         dedup_window_seconds: int = DEFAULT_DEDUP_WINDOW_SECONDS,
         broadcaster: Any | None = None,  # P2.4: IncidentBroadcaster; optional
+        escalation_cooldown_seconds: int = DEFAULT_ESCALATION_COOLDOWN_SECONDS,
+        notifier: Any | None = None,  # WebhookNotifier; optional
     ) -> None:
         self._config = config
         self._llm = llm
@@ -106,6 +137,8 @@ class Orchestrator(IOrchestrator):
         self._orch_timeout = orchestrator_timeout_seconds
         self._dedup_window = dedup_window_seconds
         self._broadcaster = broadcaster
+        self._escalation_cooldown = escalation_cooldown_seconds
+        self._notifier = notifier
         self._active_incidents: dict[str, Incident] = {}
         # Use deque with maxlen so FIFO trimming is O(1) and correct by construction.
         self._resolved_incidents: deque[Incident] = deque(maxlen=MAX_RESOLVED_INCIDENTS)
@@ -116,6 +149,11 @@ class Orchestrator(IOrchestrator):
         # every `handle_event` to keep memory bounded.
         self._recent_fingerprints: dict[str, float] = {}
         self._dedup_lock = asyncio.Lock()
+        # Fingerprints whose last incident ESCALATED, with the monotonic
+        # timestamp of the escalation. Consulted BEFORE dedup so a
+        # known-unfixable error is suppressed for the full cooldown,
+        # not just the dedup window.
+        self._escalated_fingerprints: dict[str, float] = {}
 
         # Load Service Awareness Layer — built from .env paths, no YAML needed
         self._service_registry = ServiceRegistry(config)
@@ -148,18 +186,52 @@ class Orchestrator(IOrchestrator):
     def _compute_event_fingerprint(event: LogEvent) -> str:
         """Compute the dedup fingerprint for a log event.
 
-        Mirrors ``backend.persistence.repositories.incident_repo.compute_fingerprint``;
-        we re-implement the handful of lines here so the orchestrator's
-        in-memory path doesn't have to import the persistence package
-        (which pulls in SQLAlchemy for no benefit when DATABASE_URL is
-        empty).
+        Delegates to the canonical
+        :func:`backend.shared.fingerprint.compute_fingerprint` — the
+        SAME function used by
+        ``backend.persistence.repositories.incident_repo.compute_fingerprint``
+        — so the in-memory cache and the DB dedup query can never
+        disagree about what counts as "the same error". The line is
+        normalized first (timestamps, PIDs, request ids, IPs collapse
+        to placeholders), which is what makes real log storms dedup.
         """
-        import hashlib
-        src = event.source_file or ""
-        pat = event.matched_pattern or ""
-        line = (event.line_content or "").strip()
-        material = f"{src}|{pat}|{line}".encode("utf-8", errors="replace")
-        return hashlib.sha256(material).hexdigest()
+        return fp.compute_fingerprint(
+            event.source_file or "",
+            event.matched_pattern or "",
+            event.line_content or "",
+        )
+
+    def _is_suppressed(self, fingerprint: str) -> bool:
+        """Return True if this fingerprint escalated within the cooldown.
+
+        An ESCALATED incident means the agents already tried and failed
+        to fix this exact error. Re-running the full pipeline every time
+        the dedup window expires would burn the LLM budget retrying a
+        known-failed fix — so we suppress for ``escalation_cooldown``
+        seconds and let the operator (notified via webhook) intervene.
+        """
+        if not fingerprint or self._escalation_cooldown <= 0:
+            return False
+        ts = self._escalated_fingerprints.get(fingerprint)
+        if ts is None:
+            return False
+        if (time.monotonic() - ts) < self._escalation_cooldown:
+            return True
+        # Cooldown expired — allow a fresh attempt.
+        self._escalated_fingerprints.pop(fingerprint, None)
+        return False
+
+    def _record_escalation(self, fingerprint: str) -> None:
+        """Mark a fingerprint as recently escalated (starts the cooldown)."""
+        if not fingerprint or self._escalation_cooldown <= 0:
+            return
+        now = time.monotonic()
+        # Opportunistic eviction so the map stays bounded.
+        cutoff = now - (self._escalation_cooldown * 2)
+        stale = [k for k, ts in self._escalated_fingerprints.items() if ts < cutoff]
+        for k in stale:
+            self._escalated_fingerprints.pop(k, None)
+        self._escalated_fingerprints[fingerprint] = now
 
     async def _is_duplicate(self, fingerprint: str) -> bool:
         """Return True if this fingerprint has been seen within the dedup window.
@@ -189,9 +261,9 @@ class Orchestrator(IOrchestrator):
             # Opportunistic eviction so the dict doesn't grow forever.
             cutoff = now - (self._dedup_window * 2)
             if self._recent_fingerprints:
-                stale = [fp for fp, ts in self._recent_fingerprints.items() if ts < cutoff]
-                for fp in stale:
-                    self._recent_fingerprints.pop(fp, None)
+                stale = [key for key, ts in self._recent_fingerprints.items() if ts < cutoff]
+                for key in stale:
+                    self._recent_fingerprints.pop(key, None)
 
             last = self._recent_fingerprints.get(fingerprint)
             if last is not None and (now - last) < self._dedup_window:
@@ -249,13 +321,24 @@ class Orchestrator(IOrchestrator):
             inc_circuit_breaker_trip()
             return None
 
-        # --- P1.3: fingerprint dedup ---
         fingerprint = self._compute_event_fingerprint(event)
+
+        # --- Escalation cooldown: known-failed errors are suppressed ---
+        if self._is_suppressed(fingerprint):
+            logger.info(
+                "suppress: skipping event (fingerprint escalated within %ds): %s",
+                self._escalation_cooldown, (event.line_content or "")[:80],
+            )
+            inc_event_suppressed()
+            return None
+
+        # --- P1.3: fingerprint dedup ---
         if await self._is_duplicate(fingerprint):
             logger.info(
                 "dedup: skipping event (fingerprint seen within %ds): %s",
                 self._dedup_window, (event.line_content or "")[:80],
             )
+            inc_event_deduped()
             return None
 
         incident_id = f"INC-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
@@ -337,6 +420,10 @@ class Orchestrator(IOrchestrator):
             # unconditionally — whether we got there by success, error, or escalation.
             self._active_incidents.pop(incident_id, None)
 
+            # --- Escalation cooldown bookkeeping ---
+            if incident.state == IncidentState.ESCALATED:
+                self._record_escalation(fingerprint)
+
             # --- P1.3: persist the terminal transition ---
             if self._incident_repo is not None:
                 try:
@@ -349,6 +436,13 @@ class Orchestrator(IOrchestrator):
             # fire an event — including the path where an exception skipped
             # the happy-path return at the ``TimeoutError`` branch above.
             self._broadcast("incident.updated", incident)
+
+            # --- Escalation/resolution webhook (fire-and-forget) ---
+            if self._notifier is not None:
+                try:
+                    self._notifier.notify_incident(incident)
+                except Exception:  # pragma: no cover — defensive
+                    logger.exception("notifier failed for %s", incident_id)
 
             # --- P2.3b: Prometheus counter for OBS-02 ---
             # No-op when prometheus_client is not installed.
@@ -388,14 +482,67 @@ class Orchestrator(IOrchestrator):
             symptom=incident.symptom,
             root_cause=incident.root_cause or "Unknown",
             fix=incident.fix_applied or "None",
-            vectors=incident.vectors or incident.symptom.lower().split()[:5],
+            # Keyword extraction (stop-words removed, distinctive tokens
+            # kept) — replaces the naive first-5-words split that made
+            # every entry match every query on tokens like "error".
+            vectors=incident.vectors or fp.extract_keywords(incident.symptom),
             timestamp=datetime.now(UTC).isoformat(),
         )
         await self._memory.save(entry)
 
         count = await self._memory.get_count()
         if count > self._config.memory.max_incidents_before_compaction:
-            logger.info("Memory compaction threshold reached")
+            logger.info("Memory compaction threshold reached — compacting")
+            try:
+                await self._compact_memory()
+            except Exception:  # pragma: no cover — never fail the resolve path
+                logger.exception("memory compaction failed")
+
+    async def _compact_memory(self) -> None:
+        """Compact long-term memory once it exceeds the configured threshold.
+
+        Strategy (deterministic, zero LLM spend):
+
+        1. **Merge near-duplicates** — entries with the same normalized
+           ``(root_cause, fix)`` collapse into the newest occurrence,
+           with their retrieval vectors unioned so the merged entry
+           still matches every symptom phrasing that any of its
+           ancestors matched.
+        2. **Trim to threshold** — if still over the limit, keep the
+           most recent ``max_incidents_before_compaction`` entries
+           (recency wins: newer fixes reflect the current codebase).
+
+        This was the B1 backlog item: previously the threshold check
+        only emitted a log line, so memory grew unboundedly and
+        retrieval relevance degraded as noise accumulated.
+        """
+        entries = await self._memory.load()
+        threshold = self._config.memory.max_incidents_before_compaction
+        if len(entries) <= threshold:
+            return
+
+        merged: dict[tuple[str, str], MemoryEntry] = {}
+        for e in entries:  # load() returns oldest → newest
+            key = (
+                (e.root_cause or "").strip().lower(),
+                (e.fix or "").strip().lower(),
+            )
+            prev = merged.get(key)
+            if prev is not None:
+                # Newest entry wins; union vectors so retrieval recall
+                # is preserved across the merge.
+                e.vectors = list(dict.fromkeys([*(prev.vectors or []), *(e.vectors or [])]))
+            merged[key] = e
+        compacted = list(merged.values())
+
+        if len(compacted) > threshold:
+            compacted = compacted[-threshold:]
+
+        await self._memory.compact(compacted)
+        inc_memory_compaction()
+        logger.info(
+            "Memory compacted: %d entries -> %d", len(entries), len(compacted)
+        )
 
     async def get_active_incidents(self) -> list[Incident]:
         return list(self._active_incidents.values())

@@ -12,7 +12,6 @@ the log-storm dedup step in P1.3.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -21,6 +20,7 @@ from sqlalchemy import and_, select
 
 from backend.persistence.models import IncidentRow
 from backend.persistence.session import Database
+from backend.shared.fingerprint import compute_fingerprint as _canonical_fingerprint
 from backend.shared.models import (
     ActivityEntry,
     ActivityType,
@@ -42,15 +42,20 @@ _TERMINAL_STATES = {IncidentState.RESOLVED.value, IncidentState.ESCALATED.value}
 def compute_fingerprint(event: LogEvent) -> str:
     """Deterministic dedup key for a log event.
 
-    Format: ``sha256(source_file|matched_pattern|normalized_line)``.
-    Timestamps and line numbers are intentionally *not* included so a
-    1000-line log storm of the same error collapses to one fingerprint.
+    Delegates to :func:`backend.shared.fingerprint.compute_fingerprint`
+    — the single source of truth shared with the orchestrator's
+    in-memory dedup cache — so the two layers can never drift apart.
+
+    The line content is *normalized* before hashing (timestamps, PIDs,
+    request ids, IPs, hex addresses collapse to placeholders) so a
+    1000-line log storm of the same error, each line carrying a fresh
+    timestamp, collapses to ONE fingerprint.
     """
-    src = event.source_file or ""
-    pat = event.matched_pattern or ""
-    line = (event.line_content or "").strip()
-    material = f"{src}|{pat}|{line}".encode("utf-8", errors="replace")
-    return hashlib.sha256(material).hexdigest()
+    return _canonical_fingerprint(
+        event.source_file or "",
+        event.matched_pattern or "",
+        event.line_content or "",
+    )
 
 
 class IncidentRepository:
