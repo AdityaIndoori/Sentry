@@ -146,6 +146,18 @@ class Settings:
     orchestrator_timeout_seconds: int = 300
     auto_commit_enabled: bool = False
 
+    # --- Effectiveness knobs (dedup / suppression / notifications) ----------
+    # Sliding dedup window for identical-fingerprint events (seconds).
+    dedup_window_seconds: int = 60
+    # After an incident ESCALATES, suppress re-processing of the SAME
+    # fingerprint for this many seconds (0 = disabled). Prevents an
+    # unfixable recurring error from burning the LLM budget in a loop.
+    escalation_cooldown_seconds: int = 1800
+    # Webhook URL to notify when an incident ESCALATES (and optionally
+    # RESOLVES). Empty = notifications disabled.
+    notify_webhook_url: str = ""
+    notify_on_resolved: bool = False
+
     # ------------------------------------------------------------------------
     def to_app_config(self) -> AppConfig:
         """Render this settings object as the legacy ``AppConfig`` dataclass."""
@@ -252,6 +264,10 @@ if _HAS_PYDANTIC_SETTINGS:
         SERVICE_NAME: str = "sentry"
         ORCHESTRATOR_TIMEOUT_SECONDS: int = 300
         AUTO_COMMIT_ENABLED: bool = False
+        DEDUP_WINDOW_SECONDS: int = 60
+        ESCALATION_COOLDOWN_SECONDS: int = 1800
+        NOTIFY_WEBHOOK_URL: str = ""
+        NOTIFY_ON_RESOLVED: bool = False
 
         def to_settings(self) -> Settings:
             try:
@@ -300,6 +316,10 @@ if _HAS_PYDANTIC_SETTINGS:
                 service_name=self.SERVICE_NAME,
                 orchestrator_timeout_seconds=self.ORCHESTRATOR_TIMEOUT_SECONDS,
                 auto_commit_enabled=self.AUTO_COMMIT_ENABLED,
+                dedup_window_seconds=self.DEDUP_WINDOW_SECONDS,
+                escalation_cooldown_seconds=self.ESCALATION_COOLDOWN_SECONDS,
+                notify_webhook_url=self.NOTIFY_WEBHOOK_URL,
+                notify_on_resolved=self.NOTIFY_ON_RESOLVED,
             )
 
 
@@ -358,6 +378,10 @@ def _build_settings_from_env() -> Settings:
         service_name=_env("SERVICE_NAME", "sentry") or "sentry",
         orchestrator_timeout_seconds=_env_int("ORCHESTRATOR_TIMEOUT_SECONDS", 300),
         auto_commit_enabled=_env_bool("AUTO_COMMIT_ENABLED", False),
+        dedup_window_seconds=_env_int("DEDUP_WINDOW_SECONDS", 60),
+        escalation_cooldown_seconds=_env_int("ESCALATION_COOLDOWN_SECONDS", 1800),
+        notify_webhook_url=_env("NOTIFY_WEBHOOK_URL", "") or "",
+        notify_on_resolved=_env_bool("NOTIFY_ON_RESOLVED", False),
     )
 
 

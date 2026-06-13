@@ -118,6 +118,27 @@ if _AVAILABLE:
         "Number of times the cost circuit breaker has tripped.",
         registry=REGISTRY,
     )
+    _DEDUPED = Counter(
+        "sentry_events_deduped_total",
+        "Log events skipped because their fingerprint was seen within the dedup window.",
+        registry=REGISTRY,
+    )
+    _SUPPRESSED = Counter(
+        "sentry_events_suppressed_total",
+        "Log events skipped because their fingerprint recently ESCALATED (cooldown).",
+        registry=REGISTRY,
+    )
+    _NOTIFICATIONS = Counter(
+        "sentry_notifications_total",
+        "Escalation/resolution webhook notifications grouped by delivery outcome.",
+        labelnames=("success",),
+        registry=REGISTRY,
+    )
+    _COMPACTIONS = Counter(
+        "sentry_memory_compactions_total",
+        "Number of automatic memory compaction runs.",
+        registry=REGISTRY,
+    )
 else:
     # P4.9g — same rationale as the import-time fallback: these names
     # are only referenced inside ``if _AVAILABLE:`` guards, but mypy
@@ -129,6 +150,10 @@ else:
     _LLM_COST: Any = None  # type: ignore[no-redef]
     _WATCHER_EVENTS: Any = None  # type: ignore[no-redef]
     _CB_TRIPS: Any = None  # type: ignore[no-redef]
+    _DEDUPED: Any = None  # type: ignore[no-redef]
+    _SUPPRESSED: Any = None  # type: ignore[no-redef]
+    _NOTIFICATIONS: Any = None  # type: ignore[no-redef]
+    _COMPACTIONS: Any = None  # type: ignore[no-redef]
 
 
 
@@ -199,6 +224,46 @@ def inc_circuit_breaker_trip() -> None:
         logger.exception("metrics: inc_circuit_breaker_trip failed")
 
 
+def inc_event_deduped() -> None:
+    """Record a log event short-circuited by fingerprint dedup."""
+    if not _AVAILABLE:
+        return
+    try:
+        _DEDUPED.inc()
+    except Exception:  # pragma: no cover
+        logger.exception("metrics: inc_event_deduped failed")
+
+
+def inc_event_suppressed() -> None:
+    """Record a log event suppressed by the escalation cooldown."""
+    if not _AVAILABLE:
+        return
+    try:
+        _SUPPRESSED.inc()
+    except Exception:  # pragma: no cover
+        logger.exception("metrics: inc_event_suppressed failed")
+
+
+def inc_notification(success: bool) -> None:
+    """Record a webhook notification delivery attempt."""
+    if not _AVAILABLE:
+        return
+    try:
+        _NOTIFICATIONS.labels(success=("true" if success else "false")).inc()
+    except Exception:  # pragma: no cover
+        logger.exception("metrics: inc_notification failed")
+
+
+def inc_memory_compaction() -> None:
+    """Record an automatic memory compaction run."""
+    if not _AVAILABLE:
+        return
+    try:
+        _COMPACTIONS.inc()
+    except Exception:  # pragma: no cover
+        logger.exception("metrics: inc_memory_compaction failed")
+
+
 def render_metrics() -> tuple[bytes, str]:
     """Return ``(body, content_type)`` for the ``/metrics`` endpoint.
 
@@ -217,8 +282,12 @@ def render_metrics() -> tuple[bytes, str]:
 
 __all__ = [
     "inc_circuit_breaker_trip",
+    "inc_event_deduped",
+    "inc_event_suppressed",
     "inc_incident",
     "inc_llm_call",
+    "inc_memory_compaction",
+    "inc_notification",
     "inc_tool_call",
     "inc_watcher_event",
     "is_available",
