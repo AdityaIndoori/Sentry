@@ -553,7 +553,9 @@ class TestEffectivenessSettings:
 
     def test_env_fallback_reads_new_knobs(self):
         import os
+
         from backend.shared.settings import _build_settings_from_env
+
         env = {
             "DEDUP_WINDOW_SECONDS": "120",
             "ESCALATION_COOLDOWN_SECONDS": "600",
