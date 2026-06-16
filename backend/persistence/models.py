@@ -62,6 +62,12 @@ class IncidentRow(Base):
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cost_usd: Mapped[float] = mapped_column(nullable=False, default=0.0)
 
+    # SaaS multi-tenancy: the owning account. NULL means "global /
+    # single-tenant" so every pre-SaaS row and the local-dev path keep
+    # working unchanged. Indexed because every tenant-scoped query
+    # filters on it.
+    account_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+
     # Normalized (source_file|matched_pattern|line) fingerprint for dedup.
     fingerprint_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
@@ -172,6 +178,65 @@ class ApiTokenRow(Base):
 
 
 # ────────────────────────────────────────────────────────────────────
+# SaaS — Accounts (end-user tenants)
+# ────────────────────────────────────────────────────────────────────
+
+
+class AccountRow(Base):
+    """A SaaS tenant: one signed-up end user (or team owner).
+
+    Passwords are stored only as a self-describing PBKDF2 hash
+    (see :mod:`backend.shared.accounts`). The raw password is never
+    persisted. ``email`` is unique + indexed (lookups are
+    case-insensitive because the value is normalized before insert).
+    """
+
+    __tablename__ = "accounts"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    # Default remediation posture for this tenant's services: "audit"
+    # (observe + recommend only) or "active" (execute fixes).
+    default_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="audit")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now
+    )
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+# ────────────────────────────────────────────────────────────────────
+# SaaS — Ingestion tokens (per-account log-shipping keys)
+# ────────────────────────────────────────────────────────────────────
+
+
+class IngestionTokenRow(Base):
+    """A per-account key used to authenticate the ``POST /api/ingest``
+    log-shipping endpoint.
+
+    Distinct from :class:`ApiTokenRow` (dashboard/ops bearer tokens):
+    ingestion tokens carry no scopes and grant exactly one capability —
+    pushing log lines into *their own* account's pipeline. Only the
+    SHA-256 hash is stored; the raw token is shown once at mint time.
+    """
+
+    __tablename__ = "ingestion_tokens"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    # Human label for the service this token ships logs for, e.g.
+    # "prod-api" or "redis-cache".
+    service_name: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utc_now
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+# ────────────────────────────────────────────────────────────────────
 # SEC-30 — audit_log append-only triggers (defense-in-depth).
 #
 # These DDL event listeners fire right after the ``audit_log`` table is
@@ -254,10 +319,12 @@ event.listen(
 
 
 __all__ = [
+    "AccountRow",
     "ApiTokenRow",
     "AuditLogRow",
     "Base",
     "IncidentRow",
+    "IngestionTokenRow",
     "MemoryEntryRow",
     "MemoryStateRow",
 ]

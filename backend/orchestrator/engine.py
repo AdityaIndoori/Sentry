@@ -350,9 +350,16 @@ class Orchestrator(IOrchestrator):
         self._active_incidents[incident_id] = incident
 
         # --- P1.3: persist on creation (Postgres path only) ---
+        # SaaS multi-tenancy: events arriving via the remote ingestion API
+        # carry an ``account_id`` so the incident is scoped to that tenant.
+        # Filesystem-watcher events have ``account_id is None`` → the row
+        # stays global (single-tenant / dev behaviour).
+        account_id = getattr(event, "account_id", None)
         if self._incident_repo is not None:
             try:
-                await self._incident_repo.save(incident, fingerprint=fingerprint)
+                await self._incident_repo.save(
+                    incident, fingerprint=fingerprint, account_id=account_id
+                )
             except Exception:  # pragma: no cover
                 logger.exception("incident_repo.save failed at creation")
 

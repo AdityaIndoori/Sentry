@@ -108,7 +108,7 @@ class Settings:
     anthropic_max_tokens: int = 16384
     bedrock_gateway_api_key: str = ""
     bedrock_gateway_base_url: str = ""
-    bedrock_gateway_model: str = "anthropic.claude-opus-4-0-20250514"
+    bedrock_gateway_model: str = "us.anthropic.claude-opus-4-8"
     bedrock_gateway_max_tokens: int = 16384
 
     # --- Security ------------------------------------------------------------
@@ -136,6 +136,14 @@ class Settings:
     # --- P1.2 / P1.4 / P2.x forward-looking knobs (unused yet) ---------------
     database_url: str | None = None
     api_auth_token: str | None = None
+    # --- Cloudflare Access (SaaS auth) --------------------------------------
+    # When ``cf_access_team_domain`` is set, the API trusts the
+    # ``Cf-Access-Jwt-Assertion`` header that Cloudflare Access injects in
+    # front of the app, verifies it against the team's public keys, and
+    # maps the verified email to a tenant account. Empty = Access auth
+    # disabled (falls back to the opaque-bearer / dev-mode behaviour).
+    cf_access_team_domain: str = ""
+    cf_access_aud: str = ""
     secrets_backend: str = "env"  # env | file | sops | vault
     secrets_vault_addr: str | None = None
     secrets_vault_role: str | None = None
@@ -232,7 +240,7 @@ if _HAS_PYDANTIC_SETTINGS:
         ANTHROPIC_MAX_TOKENS: int = 16384
         BEDROCK_GATEWAY_API_KEY: str = ""
         BEDROCK_GATEWAY_BASE_URL: str = ""
-        BEDROCK_GATEWAY_MODEL: str = "anthropic.claude-opus-4-0-20250514"
+        BEDROCK_GATEWAY_MODEL: str = "us.anthropic.claude-opus-4-8"
         BEDROCK_GATEWAY_MAX_TOKENS: int = 16384
 
         STOP_FILE_PATH: str = "/app/STOP_SENTRY"
@@ -255,6 +263,8 @@ if _HAS_PYDANTIC_SETTINGS:
 
         DATABASE_URL: str | None = None
         API_AUTH_TOKEN: str | None = None
+        CF_ACCESS_TEAM_DOMAIN: str = ""
+        CF_ACCESS_AUD: str = ""
         SECRETS_BACKEND: str = "env"
         SECRETS_VAULT_ADDR: str | None = None
         SECRETS_VAULT_ROLE: str | None = None
@@ -307,6 +317,8 @@ if _HAS_PYDANTIC_SETTINGS:
                 api_port=self.API_PORT,
                 database_url=self.DATABASE_URL,
                 api_auth_token=self.API_AUTH_TOKEN,
+                cf_access_team_domain=self.CF_ACCESS_TEAM_DOMAIN,
+                cf_access_aud=self.CF_ACCESS_AUD,
                 secrets_backend=self.SECRETS_BACKEND,
                 secrets_vault_addr=self.SECRETS_VAULT_ADDR,
                 secrets_vault_role=self.SECRETS_VAULT_ROLE,
@@ -349,8 +361,8 @@ def _build_settings_from_env() -> Settings:
         anthropic_max_tokens=_env_int("ANTHROPIC_MAX_TOKENS", 16384),
         bedrock_gateway_api_key=_env("BEDROCK_GATEWAY_API_KEY", "") or "",
         bedrock_gateway_base_url=_env("BEDROCK_GATEWAY_BASE_URL", "") or "",
-        bedrock_gateway_model=_env("BEDROCK_GATEWAY_MODEL", "anthropic.claude-opus-4-0-20250514")
-        or "anthropic.claude-opus-4-0-20250514",
+        bedrock_gateway_model=_env("BEDROCK_GATEWAY_MODEL", "us.anthropic.claude-opus-4-8")
+        or "us.anthropic.claude-opus-4-8",
         bedrock_gateway_max_tokens=_env_int("BEDROCK_GATEWAY_MAX_TOKENS", 16384),
         stop_file_path=_env("STOP_FILE_PATH", "/app/STOP_SENTRY") or "/app/STOP_SENTRY",
         max_cost_per_10min_usd=_env_float("MAX_COST_10MIN", 5.00),
@@ -369,6 +381,8 @@ def _build_settings_from_env() -> Settings:
         api_port=_env_int("API_PORT", 8000),
         database_url=_env("DATABASE_URL"),
         api_auth_token=_env("API_AUTH_TOKEN"),
+        cf_access_team_domain=_env("CF_ACCESS_TEAM_DOMAIN", "") or "",
+        cf_access_aud=_env("CF_ACCESS_AUD", "") or "",
         secrets_backend=_env("SECRETS_BACKEND", "env") or "env",
         secrets_vault_addr=_env("SECRETS_VAULT_ADDR"),
         secrets_vault_role=_env("SECRETS_VAULT_ROLE"),

@@ -1,0 +1,80 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+#
+# Deploys Sentry as a multi-tenant SaaS:
+#   * sentry-api      — the FastAPI backend (Docker), public on Render.
+#   * sentry-frontend — the React dashboard (static site) with /api/* proxied.
+#   * sentry-db       — managed Postgres (DATABASE_URL wired automatically).
+#
+# Auth: Cloudflare Access. Put a custom hostname (DNS in Cloudflare,
+# proxied) in front of ``sentry-frontend`` + ``sentry-api`` and create an
+# Access application on that hostname. Then set CF_ACCESS_TEAM_DOMAIN +
+# CF_ACCESS_AUD below (as dashboard env vars / secrets). ``/api/ingest``
+# must be left as a PUBLIC (bypass) path in the Access policy so log
+# shippers can post with their X-Ingest-Token.
+#
+# Deploy:  render blueprint launch   (or connect the repo in the dashboard)
+
+databases:
+  - name: sentry-db
+    databaseName: sentry
+    plan: free               # current free tier; bump to basic_256mb+ for production
+    postgresMajorVersion: "16"
+
+services:
+  # ── Backend API (FastAPI + LangGraph) ─────────────────────────────
+  - type: web
+    name: sentry-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /api/health
+    # NOTE: DB migrations via a preDeployCommand require a paid plan. On the
+    # free tier the app auto-creates its schema on boot (Database.create_all);
+    # once you upgrade the plan, re-add:
+    #   preDeployCommand: "python -m alembic -c backend/persistence/alembic.ini upgrade head"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sentry-db
+          property: connectionString
+      - key: SENTRY_MODE
+        value: AUDIT                 # observe + recommend; flip to ACTIVE per-tenant later
+      # ── LLM: AWS Bedrock Access Gateway (OpenAI-compatible) ──
+      - key: LLM_PROVIDER
+        value: bedrock_gateway
+      - key: BEDROCK_GATEWAY_BASE_URL
+        value: http://Bedroc-Proxy-fYTbaje6iyYG-268555913.us-west-2.elb.amazonaws.com/api/v1
+      - key: BEDROCK_GATEWAY_MODEL
+        value: us.anthropic.claude-opus-4-8
+      - key: BEDROCK_GATEWAY_API_KEY
+        sync: false                  # set in the Render dashboard (secret)
+      # ── Cloudflare Access ──
+      # Team domain + the "Sentry" Access app's AUD tag (non-secret;
+      # the JWT is verified against Cloudflare's public JWKS).
+      - key: CF_ACCESS_TEAM_DOMAIN
+        value: aindoori.cloudflareaccess.com
+      - key: CF_ACCESS_AUD
+        value: 745e4f9c43b58d6ba44fa86f834dc5a85d6010321f048546f687dce1071455c5
+      # ── Misc ──
+      - key: PROMETHEUS_ENABLED
+        value: "true"
+      - key: ORCHESTRATOR_TIMEOUT_SECONDS
+        value: "300"
+
+  # ── Frontend dashboard (Vite static build) ────────────────────────
+  - type: web
+    name: sentry-frontend
+    runtime: static
+    buildCommand: "cd frontend && npm ci && npm run build"
+    staticPublishPath: ./frontend/dist
+    # Proxy API + ingest + SSE to the backend so the browser only ever
+    # talks to one origin (which is what Cloudflare Access protects).
+    routes:
+      - type: rewrite
+        source: /api/*
+        destination: https://sentry-api.onrender.com/api/*
+      # SPA fallback — every non-API path serves index.html.
+      - type: rewrite
+        source: /*
+        destination: /index.html

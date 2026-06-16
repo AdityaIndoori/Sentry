@@ -68,8 +68,21 @@ class IncidentRepository:
     # Writes
     # ------------------------------------------------------------------
 
-    async def save(self, incident: Incident, fingerprint: str | None = None) -> None:
-        """Upsert an incident + its activity log + vectors."""
+    async def save(
+        self,
+        incident: Incident,
+        fingerprint: str | None = None,
+        *,
+        account_id: str | None = None,
+    ) -> None:
+        """Upsert an incident + its activity log + vectors.
+
+        ``account_id`` ties the incident to a SaaS tenant. ``None`` keeps
+        the row global (single-tenant / local-dev behaviour). On update
+        we only overwrite ``account_id`` when a non-None value is passed
+        so a later state-transition save doesn't accidentally orphan the
+        row from its tenant.
+        """
         async with self._db.sessionmaker() as session:
             row = await session.get(IncidentRow, incident.id)
             if row is None:
@@ -84,6 +97,7 @@ class IncidentRepository:
                     commit_id=incident.commit_id,
                     retry_count=incident.retry_count,
                     cost_usd=incident.cost_usd,
+                    account_id=account_id,
                     fingerprint_hash=fingerprint,
                     activity_log=[a.to_dict() for a in incident.activity_log],
                     log_events=[_serialize_event(e) for e in incident.log_events],

@@ -41,6 +41,13 @@ from backend.shared.principal import Principal, hash_token
 
 logger = logging.getLogger(__name__)
 
+# Scopes granted to a Cloudflare-Access-authenticated dashboard user.
+# A session can do everything an operator can within its OWN tenant;
+# cross-tenant access is prevented by account_id scoping, not scope.
+_CF_SESSION_SCOPES = frozenset({
+    "incidents:read", "incidents:trigger", "watcher:control",
+})
+
 
 # ---------------------------------------------------------------------------
 # Token registry
@@ -194,6 +201,16 @@ _OPEN_PATHS: frozenset[str] = frozenset({
     "/redoc",
     "/openapi.json",
     "/",
+    # SaaS: signup + login must be reachable before a session token
+    # exists. ``/api/ingest`` authenticates with its own
+    # ``X-Ingest-Token`` header (resolved inside the handler), not the
+    # dashboard bearer — so it is exempt from the bearer middleware too.
+    "/api/auth/signup",
+    "/api/auth/login",
+    # Tells the SPA which auth mode is active (password vs Cloudflare
+    # Access) before the user is authenticated — must be open.
+    "/api/auth/config",
+    "/api/ingest",
 })
 
 
@@ -263,6 +280,16 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if request.url.path in _OPEN_PATHS:
             return await call_next(request)
 
+        # ── Cloudflare Access (SaaS auth) ──────────────────────────────
+        # When a CF Access verifier is configured, prefer the
+        # cryptographically-verified ``Cf-Access-Jwt-Assertion`` header.
+        # A valid JWT auto-provisions/loads the tenant account and
+        # attaches its Principal — the dashboard never sends a bearer.
+        cf_principal = await self._resolve_cf_access(request)
+        if cf_principal is not None:
+            request.state.principal = cf_principal
+            return await call_next(request)
+
         registry = _get_registry(request)
         auth_required = registry is not None and not registry.is_empty()
 
@@ -299,6 +326,65 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         request.state.principal = principal
         return await call_next(request)
+
+    @staticmethod
+    async def _resolve_cf_access(request: Request) -> Principal | None:
+        """Verify the Cloudflare Access JWT and map it to a Principal.
+
+        Returns ``None`` when Access auth isn't configured or the header
+        is absent/invalid — the caller then falls through to the
+        bearer-token path. Auto-provisions an ``accounts`` row on the
+        first time we see a given verified email and caches the
+        resulting Principal on the container so subsequent requests
+        skip the DB.
+        """
+        from backend.api.cf_access import CF_ACCESS_JWT_HEADER
+
+        try:
+            container = request.app.state.container
+        except AttributeError:
+            return None
+        if container is None:
+            return None
+        verifier = getattr(container, "cf_verifier", None)
+        if verifier is None or not getattr(verifier, "enabled", False):
+            return None
+
+        token = request.headers.get(CF_ACCESS_JWT_HEADER)
+        if not token:
+            return None
+        claims = verifier.verify(token)
+        if claims is None:
+            return None
+        email = verifier.email_from_claims(claims)
+        if not email:
+            return None
+
+        cache = getattr(container, "cf_principal_cache", None)
+        if cache is not None and email in cache:
+            cached: Principal = cache[email]
+            return cached
+
+        # Auto-provision (or load) the account for this verified email.
+        account_repo = getattr(container, "account_repo", None)
+        account_id: str | None = None
+        if account_repo is not None:
+            try:
+                account = await account_repo.get_or_create_sso(email)
+                account_id = account.id
+            except Exception:  # pragma: no cover — defensive
+                logger.exception("CF Access: account provisioning failed for %s", email)
+
+        principal = Principal(
+            id=account_id or hash_token(email)[:12],
+            name=email,
+            role="account",
+            scopes=_CF_SESSION_SCOPES,
+            account_id=account_id,
+        )
+        if cache is not None:
+            cache[email] = principal
+        return principal
 
 
 def _get_registry(request: Request) -> TokenRegistry | None:

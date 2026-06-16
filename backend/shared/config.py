@@ -74,7 +74,9 @@ class BedrockGatewayConfig:
     """AWS Bedrock Access Gateway (OpenAI-compatible) configuration."""
     api_key: str = ""  # Gateway API key
     base_url: str = ""  # e.g. https://your-gateway.execute-api.us-east-1.amazonaws.com/api/v1
-    model: str = "anthropic.claude-opus-4-0-20250514"  # Bedrock model ID
+    # Bedrock model ID. Default is the strongest Opus tier the gateway
+    # exposes for Sentry's agentic triage/remediation workload.
+    model: str = "us.anthropic.claude-opus-4-8"
     max_tokens: int = 16384
 
 
@@ -160,7 +162,7 @@ def load_config() -> AppConfig:
     bedrock_gw = BedrockGatewayConfig(
         api_key=os.environ.get("BEDROCK_GATEWAY_API_KEY", ""),
         base_url=os.environ.get("BEDROCK_GATEWAY_BASE_URL", ""),
-        model=os.environ.get("BEDROCK_GATEWAY_MODEL", "anthropic.claude-opus-4-0-20250514"),
+        model=os.environ.get("BEDROCK_GATEWAY_MODEL", "us.anthropic.claude-opus-4-8"),
         max_tokens=int(os.environ.get("BEDROCK_GATEWAY_MAX_TOKENS", "16384")),
     )
 

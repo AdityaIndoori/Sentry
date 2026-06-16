@@ -106,4 +106,25 @@ export const api = {
   config: () => apiFetch("/config"),
   watcherStart: () => apiFetch("/watcher/start", { method: "POST" }),
   watcherStop: () => apiFetch("/watcher/stop", { method: "POST" }),
+
+  // ── SaaS: auth + onboarding ──────────────────────────────────────
+  signup: (email, password, displayName = "") =>
+    apiFetch("/auth/signup", {
+      method: "POST",
+      body: { email, password, display_name: displayName },
+    }),
+  login: (email, password) =>
+    apiFetch("/auth/login", { method: "POST", body: { email, password } }),
+  authConfig: () => apiFetch("/auth/config"),
+  me: () => apiFetch("/auth/me"),
+  listIngestTokens: () => apiFetch("/ingest-tokens"),
+  mintIngestToken: (serviceName = "") =>
+    apiFetch("/ingest-tokens", {
+      method: "POST",
+      body: { service_name: serviceName },
+    }),
+  revokeIngestToken: (id) =>
+    apiFetch(`/ingest-tokens/${id}`, { method: "DELETE" }),
 };
+
+

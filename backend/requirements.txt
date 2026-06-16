@@ -8,6 +8,11 @@ pydantic-settings>=2.0.0,<3.0.0
 python-dotenv==1.0.1
 gitpython>=3.1.0
 
+# SaaS auth — verify Cloudflare Access JWTs (Cf-Access-Jwt-Assertion).
+# ``[crypto]`` pulls in ``cryptography`` for RS256 signature verification.
+pyjwt[crypto]>=2.8,<3
+
+
 # P1.2 — Persistence. SQLAlchemy 2.0 async + asyncpg (Postgres) /
 # aiosqlite (dev + CI). Alembic for migrations. Greenlet is
 # required by SQLAlchemy async under the hood.

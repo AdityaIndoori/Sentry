@@ -54,6 +54,11 @@ class LogEvent:
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
     matched_pattern: str = ""
     line_number: int = 0
+    # SaaS multi-tenancy: set when this event arrived via the remote
+    # ingestion API (``POST /api/ingest``) authenticated by a tenant's
+    # ingestion token. ``None`` for the local filesystem watcher path
+    # (single-tenant / dev), which keeps incidents global.
+    account_id: str | None = None
 
     def to_dict(self) -> dict:
         return {

@@ -207,6 +207,8 @@ module = [
   "backend.shared.interfaces",
   "backend.api.auth",
   "backend.api.broadcaster",
+  # SaaS pass: Cloudflare Access verifier is strict from birth.
+  "backend.api.cf_access",
   "backend.persistence.session",
   "backend.persistence.models",
   "backend.persistence.repositories.token_repo",
@@ -224,6 +226,10 @@ module = [
   # Effectiveness pass: new modules are strict from birth.
   "backend.shared.fingerprint",
   "backend.services.notifier",
+  # SaaS pass: new multi-tenant modules are strict from birth.
+  "backend.shared.accounts",
+  "backend.persistence.repositories.account_repo",
+  "backend.persistence.repositories.ingestion_token_repo",
   # P4.7c: retired ``backend.agents.*`` + ``backend.tools.*`` override
   # blocks — all agent + tool modules pass ``mypy --strict``.
   "backend.agents.base_agent",

@@ -84,7 +84,11 @@ def build_container(
     # :class:`ImmutableAuditLog` stays the default when no explicit DB
     # URL is set (it writes to disk with no DB round-trip). Setting
     # ``DATABASE_URL`` upgrades it to :class:`PostgresAuditLog`.
+    from backend.persistence.repositories.account_repo import AccountRepository
     from backend.persistence.repositories.incident_repo import IncidentRepository
+    from backend.persistence.repositories.ingestion_token_repo import (
+        IngestionTokenRepository,
+    )
     from backend.persistence.repositories.memory_repo import PostgresMemoryRepo
     from backend.persistence.repositories.token_repo import TokenRepository
     from backend.persistence.session import build_database
@@ -108,6 +112,16 @@ def build_container(
     # an empty table is indistinguishable from "no persisted tokens"
     # and the env-seeded admin token path is preserved.
     token_repo = TokenRepository(database)
+    # SaaS: per-tenant accounts + ingestion tokens. Always created
+    # (empty tables when running single-tenant / local-dev); the SaaS
+    # API routes 503 gracefully if these are ever absent.
+    account_repo = AccountRepository(database)
+    ingestion_token_repo = IngestionTokenRepository(database)
+
+    # SaaS auth: Cloudflare Access JWT verifier (None when CF_ACCESS_*
+    # env is unset → Access auth off, opaque-bearer/dev-mode preserved).
+    from backend.api.cf_access import build_verifier as _build_cf_verifier
+    cf_verifier = _build_cf_verifier(settings)
 
     # P4.9d: the audit_log local is widened to the structural ``IAuditLog``
     # port so the two concrete backends (PostgresAuditLog when a DATABASE_URL
@@ -310,6 +324,9 @@ def build_container(
         incident_repo=incident_repo,
         auth_tokens=auth_tokens,
         token_repo=token_repo,
+        account_repo=account_repo,
+        ingestion_token_repo=ingestion_token_repo,
+        cf_verifier=cf_verifier,
         secrets=secrets_provider,
         broadcaster=broadcaster,
         notifier=notifier,

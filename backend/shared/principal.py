@@ -47,6 +47,12 @@ class Principal:
     scopes:
         The exact scopes granted to this token, as a frozenset. The
         special value ``"*"`` in ``scopes`` grants all scopes.
+    account_id:
+        SaaS multi-tenancy: the owning account id when this principal
+        is a logged-in end-user session. ``None`` for operator/ops
+        tokens and for the single-tenant / local-dev path — in which
+        case data is *not* tenant-filtered (global scope), preserving
+        the pre-SaaS behaviour.
     issued_at:
         When the token was minted. Informational.
     """
@@ -55,6 +61,7 @@ class Principal:
     name: str
     role: str
     scopes: frozenset[str]
+    account_id: str | None = None
     issued_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def has_scope(self, scope: str) -> bool:

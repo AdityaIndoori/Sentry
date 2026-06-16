@@ -301,6 +301,14 @@ def create_app(container: ServiceContainer | None = None) -> FastAPI:
         pass
 
     _register_routes(app)
+
+    # ── SaaS surface: signup / login / ingestion / onboarding ──────────
+    # Mounted as a router (rather than inline in _register_routes) so the
+    # multi-tenant API stays cleanly separated from the single-tenant
+    # operator endpoints. Reads its deps off app.state.container.
+    from backend.api.saas_routes import router as saas_router
+    app.include_router(saas_router)
+
     return app
 
 

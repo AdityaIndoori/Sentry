@@ -65,6 +65,20 @@ class ServiceContainer:
     # are env-seeded only and won't survive a restart.
     token_repo: Any = None        # backend.persistence.repositories.token_repo.TokenRepository
 
+    # SaaS: per-tenant account + ingestion-token persistence. Power the
+    # signup/login + remote log-ingestion API. None → those routes 503.
+    account_repo: Any = None      # backend.persistence.repositories.account_repo.AccountRepository
+    ingestion_token_repo: Any = None  # ...ingestion_token_repo.IngestionTokenRepository
+
+    # SaaS auth: Cloudflare Access JWT verifier. None → Access auth off
+    # (falls back to opaque-bearer / dev-mode). When set, the auth
+    # middleware trusts the verified ``Cf-Access-Jwt-Assertion`` header
+    # and auto-provisions an account from the email claim.
+    cf_verifier: Any = None       # backend.api.cf_access.CloudflareAccessVerifier
+    # In-process cache of verified email -> Principal so we don't hit the
+    # account repo on every request.
+    cf_principal_cache: dict[str, Any] = field(default_factory=dict)
+
     # P2.2: pluggable OSS secrets provider (env/file/sops/vault).
     secrets: Any = None           # backend.shared.secrets.ISecretsProvider
 

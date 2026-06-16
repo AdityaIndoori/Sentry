@@ -34,6 +34,75 @@
         },
         "type": "object"
       },
+      "IngestRequest": {
+        "properties": {
+          "lines": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "default": "remote",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "LoginRequest": {
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ],
+        "type": "object"
+      },
+      "MintIngestTokenRequest": {
+        "properties": {
+          "service_name": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SignupRequest": {
+        "properties": {
+          "display_name": {
+            "default": "",
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ],
+        "type": "object"
+      },
       "TriggerEventRequest": {
         "properties": {
           "message": {
@@ -81,6 +150,44 @@
     }
   },
   "paths": {
+    "/api/auth/config": {
+      "get": {
+        "parameters": [],
+        "request_body_required": false,
+        "response_codes": [
+          "200"
+        ]
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "parameters": [],
+        "request_body_required": true,
+        "response_codes": [
+          "200",
+          "422"
+        ]
+      }
+    },
+    "/api/auth/me": {
+      "get": {
+        "parameters": [],
+        "request_body_required": false,
+        "response_codes": [
+          "200"
+        ]
+      }
+    },
+    "/api/auth/signup": {
+      "post": {
+        "parameters": [],
+        "request_body_required": true,
+        "response_codes": [
+          "200",
+          "422"
+        ]
+      }
+    },
     "/api/config": {
       "get": {
         "parameters": [],
@@ -114,6 +221,55 @@
           {
             "in": "path",
             "name": "incident_id",
+            "required": true
+          }
+        ],
+        "request_body_required": false,
+        "response_codes": [
+          "200",
+          "422"
+        ]
+      }
+    },
+    "/api/ingest": {
+      "post": {
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Ingest-Token",
+            "required": false
+          }
+        ],
+        "request_body_required": true,
+        "response_codes": [
+          "200",
+          "422"
+        ]
+      }
+    },
+    "/api/ingest-tokens": {
+      "get": {
+        "parameters": [],
+        "request_body_required": false,
+        "response_codes": [
+          "200"
+        ]
+      },
+      "post": {
+        "parameters": [],
+        "request_body_required": true,
+        "response_codes": [
+          "200",
+          "422"
+        ]
+      }
+    },
+    "/api/ingest-tokens/{token_id}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "token_id",
             "required": true
           }
         ],

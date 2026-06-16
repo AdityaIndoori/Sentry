@@ -5,7 +5,7 @@ import React from "react";
 import { c } from "../theme";
 import { Badge } from "./ui";
 
-export default function Header({ status, onRefresh, streamConnected }) {
+export default function Header({ status, onRefresh, streamConnected, account, onLogout }) {
   const modeColor =
     status?.mode === "ACTIVE"
       ? c.green
@@ -71,6 +71,28 @@ export default function Header({ status, onRefresh, streamConnected }) {
         >
           ↻ Refresh
         </button>
+        {account && (
+          <span style={{ fontSize: "12px", color: c.textDim, marginLeft: "4px" }}>
+            {account.name || account.account_id}
+          </span>
+        )}
+        {onLogout && (
+          <button
+            onClick={onLogout}
+            style={{
+              padding: "7px 14px",
+              borderRadius: "8px",
+              fontSize: "12px",
+              fontWeight: 600,
+              background: "transparent",
+              color: c.textDim,
+              border: `1px solid ${c.border}`,
+              cursor: "pointer",
+            }}
+          >
+            Log out
+          </button>
+        )}
       </div>
     </header>
   );

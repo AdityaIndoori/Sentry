@@ -19,11 +19,14 @@
 import React, { useEffect } from "react";
 import { useApi } from "./hooks/useApi";
 import { useIncidentStream } from "./hooks/useIncidentStream";
+import { useAuth } from "./auth/AuthContext";
+import AuthScreen from "./auth/AuthScreen";
 
 import Layout from "./components/Layout";
 import Header from "./components/Header";
 import StatusCards from "./components/StatusCards";
 import ConfigPanel from "./components/ConfigPanel";
+import ConnectService from "./components/ConnectService";
 import WatcherControls from "./components/WatcherControls";
 import TriggerForm from "./components/TriggerForm";
 import SecurityPanel from "./components/SecurityPanel";
@@ -33,6 +36,36 @@ import ToolsPanel from "./components/ToolsPanel";
 import { c } from "./theme";
 
 export default function App() {
+  const { status: authStatus, isAuthenticated, account, logout } = useAuth();
+
+  // Auth gate. While we validate any persisted token, show a minimal
+  // splash; if anonymous, show the login/signup screen; otherwise the
+  // full dashboard renders below.
+  if (authStatus === "loading") {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          background: c.bg,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: c.textDim,
+          fontFamily: "ui-sans-serif, system-ui, sans-serif",
+        }}
+      >
+        Loading…
+      </div>
+    );
+  }
+  if (!isAuthenticated) {
+    return <AuthScreen />;
+  }
+
+  return <Dashboard account={account} onLogout={logout} />;
+}
+
+function Dashboard({ account, onLogout }) {
   const { data: status, refresh: refreshStatus } = useApi("/status", 15000);
   const { data: incidents, refresh: refreshIncidents } = useApi(
     "/incidents",
@@ -69,8 +102,11 @@ export default function App() {
         status={status}
         onRefresh={refreshAll}
         streamConnected={streamConnected}
+        account={account}
+        onLogout={onLogout}
       />
       <main style={{ maxWidth: "1440px", margin: "0 auto", padding: "20px 28px" }}>
+        <ConnectService />
         <StatusCards status={status} />
         <ConfigPanel config={config} />
         <div
