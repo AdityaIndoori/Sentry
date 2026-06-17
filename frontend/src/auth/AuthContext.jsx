@@ -128,9 +128,19 @@ export function AuthProvider({ children }) {
     setToken(null);
     setAccount(null);
     setStatus("anonymous");
-    // Cloudflare Access: also clear the edge session.
-    if (cfMode && logoutUrl && typeof window !== "undefined") {
-      window.location.href = logoutUrl;
+    if (typeof window !== "undefined") {
+      // Cloudflare Access: clear the edge session, then send the user
+      // back to the app so Access immediately re-challenges for login
+      // (instead of dumping them on Cloudflare's bare "logged out" page).
+      // The ``returnTo`` is honored by Cloudflare's logout endpoint.
+      if (cfMode && logoutUrl) {
+        const back = encodeURIComponent(window.location.origin);
+        const sep = logoutUrl.includes("?") ? "&" : "?";
+        window.location.href = `${logoutUrl}${sep}returnTo=${back}`;
+      } else {
+        // Password mode: just reload to the (now anonymous) app.
+        window.location.reload();
+      }
     }
   }, [cfMode, logoutUrl]);
 
