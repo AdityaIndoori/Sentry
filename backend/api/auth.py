@@ -382,7 +382,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
             scopes=_CF_SESSION_SCOPES,
             account_id=account_id,
         )
-        if cache is not None:
+        # Only cache a principal that has a real tenant account_id. Caching a
+        # principal whose provisioning transiently failed (account_id=None)
+        # would pin the "No account context" state until restart; leaving it
+        # uncached lets the next request retry provisioning and self-heal.
+        if cache is not None and account_id is not None:
             cache[email] = principal
         return principal
 
