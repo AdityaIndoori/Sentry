@@ -247,14 +247,23 @@ class IngestionTokenRow(Base):
 # triggers are a second line of defense against a rogue operator with
 # direct DB access.
 #
-# We generate dialect-specific DDL via the ``DDL.execute_if`` guard:
-# Postgres gets a PL/pgSQL function + BEFORE UPDATE OR DELETE trigger;
-# SQLite gets two BEFORE UPDATE / BEFORE DELETE triggers that use
-# ``RAISE(ABORT, ...)``. Other dialects (e.g. MSSQL, MySQL) silently
-# skip — they currently aren't supported by Sentry.
+# SQLite gets two BEFORE UPDATE / BEFORE DELETE triggers via
+# ``after_create`` event listeners (below). Postgres triggers are
+# **not** installed via ``after_create`` because asyncpg routes
+# ``connection.execute(DDL)`` through the extended-query (prepared
+# statement) protocol, which rejects a PL/pgSQL ``CREATE FUNCTION``
+# whose ``$$ … $$`` body contains semicolons — it surfaces as the
+# misleading ``syntax error at or near "table"``. Instead the Postgres
+# trigger SQL lives in :data:`PG_AUDIT_TRIGGER_STATEMENTS` and is
+# applied by :meth:`backend.persistence.session.Database.create_all`
+# via ``exec_driver_sql`` (simple-query protocol), and by the Alembic
+# migration. Other dialects (MSSQL, MySQL) are unsupported.
 # ────────────────────────────────────────────────────────────────────
 
-_PG_AUDIT_TRIGGER_FN = DDL(
+# Each entry is a single, standalone statement (asyncpg/simple-query
+# friendly). Applied in order; idempotent thanks to ``CREATE OR
+# REPLACE`` + ``DROP TRIGGER IF EXISTS``.
+PG_AUDIT_TRIGGER_STATEMENTS: tuple[str, ...] = (
     """
     CREATE OR REPLACE FUNCTION sentry_audit_log_immutable()
     RETURNS TRIGGER AS $$
@@ -263,24 +272,13 @@ _PG_AUDIT_TRIGGER_FN = DDL(
             USING ERRCODE = '42000';
     END;
     $$ LANGUAGE plpgsql;
-    """
-)
-
-# asyncpg cannot execute more than one statement in a single
-# ``execute()`` call (it uses the extended-query protocol with no
-# multi-statement support). Splitting the DROP + CREATE into two
-# separate ``DDL`` objects — each emitted as its own event listener —
-# keeps each statement single, so both asyncpg and psycopg accept them.
-_PG_AUDIT_TRIGGER_DROP = DDL(
-    "DROP TRIGGER IF EXISTS sentry_audit_log_no_update ON audit_log;"
-)
-
-_PG_AUDIT_TRIGGER = DDL(
+    """,
+    "DROP TRIGGER IF EXISTS sentry_audit_log_no_update ON audit_log;",
     """
     CREATE TRIGGER sentry_audit_log_no_update
     BEFORE UPDATE OR DELETE ON audit_log
     FOR EACH ROW EXECUTE FUNCTION sentry_audit_log_immutable();
-    """
+    """,
 )
 
 
@@ -305,22 +303,10 @@ _SQLITE_AUDIT_NO_DELETE = DDL(
 )
 
 
-event.listen(
-    AuditLogRow.__table__,
-    "after_create",
-    _PG_AUDIT_TRIGGER_FN.execute_if(dialect="postgresql"),
-)
-event.listen(
-    AuditLogRow.__table__,
-    "after_create",
-    _PG_AUDIT_TRIGGER_DROP.execute_if(dialect="postgresql"),
-)
-event.listen(
-    AuditLogRow.__table__,
-    "after_create",
-    _PG_AUDIT_TRIGGER.execute_if(dialect="postgresql"),
-)
-
+# Only SQLite triggers are installed via ``after_create``. The Postgres
+# trigger surface is applied imperatively in ``Database.create_all`` (see
+# ``PG_AUDIT_TRIGGER_STATEMENTS``) to avoid the asyncpg extended-query
+# protocol choking on the PL/pgSQL function body.
 event.listen(
     AuditLogRow.__table__,
     "after_create",
@@ -331,6 +317,7 @@ event.listen(
     "after_create",
     _SQLITE_AUDIT_NO_DELETE.execute_if(dialect="sqlite"),
 )
+
 
 
 __all__ = [

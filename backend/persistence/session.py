@@ -45,9 +45,27 @@ class Database:
     url: str
 
     async def create_all(self, base: type[DeclarativeBase] = Base) -> None:
-        """Create every declared table. Idempotent."""
+        """Create every declared table. Idempotent.
+
+        After the tables exist, the Postgres ``audit_log`` immutability
+        triggers are installed imperatively via ``exec_driver_sql`` (one
+        statement at a time). This deliberately sidesteps SQLAlchemy's
+        ``after_create`` DDL events for Postgres: asyncpg routes
+        ``connection.execute(DDL)`` through the extended-query protocol,
+        which rejects a PL/pgSQL ``CREATE FUNCTION`` body and surfaces the
+        misleading ``syntax error at or near "table"``. ``exec_driver_sql``
+        uses the simple-query protocol, which accepts the dollar-quoted
+        function body. SQLite triggers are still handled by ``after_create``
+        listeners in ``models.py``.
+        """
+        from backend.persistence.models import PG_AUDIT_TRIGGER_STATEMENTS
+
         async with self.engine.begin() as conn:
             await conn.run_sync(base.metadata.create_all)
+            if conn.dialect.name == "postgresql":
+                for stmt in PG_AUDIT_TRIGGER_STATEMENTS:
+                    await conn.exec_driver_sql(stmt)
+
 
     async def drop_all(self, base: type[DeclarativeBase] = Base) -> None:
         """Drop every declared table — ONLY used by tests."""
