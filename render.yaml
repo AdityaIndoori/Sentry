@@ -73,7 +73,7 @@ services:
     routes:
       - type: rewrite
         source: /api/*
-        destination: https://sentry-api.onrender.com/api/*
+        destination: https://sentry-api-jtgt.onrender.com/api/*
       # SPA fallback — every non-API path serves index.html.
       - type: rewrite
         source: /*
