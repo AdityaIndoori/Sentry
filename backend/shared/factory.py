@@ -145,12 +145,19 @@ def build_container(
             database_url,
         )
 
-    # Bootstrap memory tables on first boot for sqlite/dev; Alembic owns
-    # schema evolution in production Postgres. Run the async bootstrap
-    # in a worker thread with its own event loop so we don't interfere
-    # with any pytest-asyncio / lifespan loop already wired into the
-    # calling thread.
-    if synthesized_sqlite:
+    # Bootstrap tables on first boot. ``create_all`` is idempotent
+    # (``CREATE TABLE IF NOT EXISTS``), so it is safe to run for BOTH the
+    # synthesized-sqlite dev path AND a configured Postgres URL. We used to
+    # gate this on ``synthesized_sqlite`` only and let Alembic own the
+    # Postgres schema — but managed hosts (Render free tier) can't run a
+    # pre-deploy migration step, which left the ``accounts`` /
+    # ``ingestion_tokens`` tables missing and broke Cloudflare-Access login
+    # with "relation \"accounts\" does not exist". Running create_all here
+    # guarantees the schema exists; Alembic can still upgrade it later.
+    # Run the async bootstrap in a worker thread with its own event loop so
+    # we don't interfere with any pytest-asyncio / lifespan loop already
+    # wired into the calling thread.
+    if synthesized_sqlite or settings.database_url:
         import asyncio as _asyncio
         import threading as _threading
 
