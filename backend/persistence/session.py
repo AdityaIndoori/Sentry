@@ -67,12 +67,42 @@ class Database:
         return _scope()
 
 
+def _normalize_async_url(database_url: str) -> str:
+    """Coerce a DB URL to an async-driver SQLAlchemy URL.
+
+    Managed Postgres providers (Render, Heroku, Fly, …) hand out a plain
+    ``postgresql://`` (or legacy ``postgres://``) connection string, which
+    SQLAlchemy maps to the *sync* ``psycopg2`` driver — not installed in
+    this image (we ship ``asyncpg``). Rewrite the scheme to
+    ``postgresql+asyncpg://`` so ``create_async_engine`` picks asyncpg.
+
+    Also drop a trailing ``?sslmode=...`` query param: that's libpq/psycopg
+    syntax which asyncpg rejects. asyncpg negotiates TLS automatically for
+    managed providers, so dropping it is safe.
+    """
+    url = database_url
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    if url.startswith("postgresql://"):
+        url = "postgresql+asyncpg://" + url[len("postgresql://"):]
+    # asyncpg doesn't understand libpq's ``sslmode`` query parameter.
+    if url.startswith("postgresql+asyncpg://") and "sslmode=" in url:
+        base, _, query = url.partition("?")
+        kept = "&".join(
+            p for p in query.split("&") if p and not p.startswith("sslmode=")
+        )
+        url = f"{base}?{kept}" if kept else base
+    return url
+
+
 def build_database(database_url: str, *, echo: bool = False) -> Database:
     """Construct a ``Database`` from a SQLAlchemy async URL.
 
     ``echo=True`` prints SQL for debugging. Should always be ``False`` in
-    production.
+    production. The URL is normalized to an async driver first so a bare
+    ``postgresql://`` from a managed provider still uses asyncpg.
     """
+    database_url = _normalize_async_url(database_url)
     # SQLite has limitations with pooling — use the StaticPool for in-memory
     # and the NullPool for file-based to avoid "database is locked" in tests.
     connect_args: dict[str, Any] = {}
