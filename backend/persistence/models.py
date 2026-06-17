@@ -266,14 +266,23 @@ _PG_AUDIT_TRIGGER_FN = DDL(
     """
 )
 
+# asyncpg cannot execute more than one statement in a single
+# ``execute()`` call (it uses the extended-query protocol with no
+# multi-statement support). Splitting the DROP + CREATE into two
+# separate ``DDL`` objects — each emitted as its own event listener —
+# keeps each statement single, so both asyncpg and psycopg accept them.
+_PG_AUDIT_TRIGGER_DROP = DDL(
+    "DROP TRIGGER IF EXISTS sentry_audit_log_no_update ON audit_log;"
+)
+
 _PG_AUDIT_TRIGGER = DDL(
     """
-    DROP TRIGGER IF EXISTS sentry_audit_log_no_update ON audit_log;
     CREATE TRIGGER sentry_audit_log_no_update
     BEFORE UPDATE OR DELETE ON audit_log
     FOR EACH ROW EXECUTE FUNCTION sentry_audit_log_immutable();
     """
 )
+
 
 _SQLITE_AUDIT_NO_UPDATE = DDL(
     """
@@ -304,8 +313,14 @@ event.listen(
 event.listen(
     AuditLogRow.__table__,
     "after_create",
+    _PG_AUDIT_TRIGGER_DROP.execute_if(dialect="postgresql"),
+)
+event.listen(
+    AuditLogRow.__table__,
+    "after_create",
     _PG_AUDIT_TRIGGER.execute_if(dialect="postgresql"),
 )
+
 event.listen(
     AuditLogRow.__table__,
     "after_create",
