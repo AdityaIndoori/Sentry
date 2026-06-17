@@ -124,25 +124,32 @@ export function AuthProvider({ children }) {
   );
 
   const logout = useCallback(() => {
+    // Clear the persisted bearer token FIRST so any subsequent page
+    // load (or in-flight ``api.me`` retry) sees an anonymous session.
     setAuthToken(null);
     setToken(null);
     setAccount(null);
     setStatus("anonymous");
     if (typeof window !== "undefined") {
-      // Cloudflare Access: clear the edge session, then send the user
-      // back to the app so Access immediately re-challenges for login
-      // (instead of dumping them on Cloudflare's bare "logged out" page).
-      // The ``returnTo`` is honored by Cloudflare's logout endpoint.
       if (cfMode && logoutUrl) {
+        // Cloudflare Access: clear the edge session, then send the user
+        // back to the app so Access immediately re-challenges for login
+        // (instead of dumping them on Cloudflare's bare "logged out"
+        // page). The ``returnTo`` is honored by Cloudflare's logout
+        // endpoint.
         const back = encodeURIComponent(window.location.origin);
         const sep = logoutUrl.includes("?") ? "&" : "?";
         window.location.href = `${logoutUrl}${sep}returnTo=${back}`;
-      } else {
-        // Password mode: just reload to the (now anonymous) app.
-        window.location.reload();
       }
+      // Password mode: do NOT reload. The state updates above already
+      // swap the dashboard out for <AuthScreen>. A ``window.location
+      // .reload()`` here was unreliable (the in-memory React tree could
+      // re-render the authenticated view before the navigation settled,
+      // leaving the user apparently still logged in), so we simply let
+      // React re-render from the now-cleared auth state.
     }
   }, [cfMode, logoutUrl]);
+
 
   const value = {
     token,
