@@ -131,15 +131,27 @@ export function AuthProvider({ children }) {
     setAccount(null);
     setStatus("anonymous");
     if (typeof window !== "undefined") {
-      if (cfMode && logoutUrl) {
-        // Cloudflare Access: clear the edge session, then send the user
-        // back to the app so Access immediately re-challenges for login
-        // (instead of dumping them on Cloudflare's bare "logged out"
-        // page). The ``returnTo`` is honored by Cloudflare's logout
-        // endpoint.
-        const back = encodeURIComponent(window.location.origin);
-        const sep = logoutUrl.includes("?") ? "&" : "?";
-        window.location.href = `${logoutUrl}${sep}returnTo=${back}`;
+      if (cfMode) {
+        // Cloudflare Access: log out at the edge via the *app's own*
+        // origin logout endpoint (``/cdn-cgi/access/logout``). Hitting
+        // the app-origin path (rather than the team-domain
+        // ``…cloudflareaccess.com/cdn-cgi/access/logout``) clears the
+        // app's Access cookie AND guarantees that the follow-up visit to
+        // the app is re-challenged immediately — otherwise the SPA would
+        // momentarily re-render the (now broken, 401-ing) dashboard until
+        // a manual refresh, which is exactly the bug users hit.
+        //
+        // We use ``replace`` so the authenticated dashboard URL doesn't
+        // linger in history (Back shouldn't return to a half-dead view),
+        // and ``returnTo=/`` so Cloudflare bounces straight to the login
+        // challenge for the app root instead of its bare "logged out"
+        // splash.
+        const origin = window.location.origin;
+        const back = encodeURIComponent(origin + "/");
+        window.location.replace(
+          `${origin}/cdn-cgi/access/logout?returnTo=${back}`,
+        );
+        return;
       }
       // Password mode: do NOT reload. The state updates above already
       // swap the dashboard out for <AuthScreen>. A ``window.location
@@ -148,7 +160,8 @@ export function AuthProvider({ children }) {
       // leaving the user apparently still logged in), so we simply let
       // React re-render from the now-cleared auth state.
     }
-  }, [cfMode, logoutUrl]);
+  }, [cfMode]);
+
 
 
   const value = {
